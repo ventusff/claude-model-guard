@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 470" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace">
+  <defs>
+    <clipPath id="win"><rect x="1.5" y="1.5" width="897" height="467" rx="12"/></clipPath>
+  </defs>
+  <rect x="1.5" y="1.5" width="897" height="467" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+  <g clip-path="url(#win)">
+    <circle cx="26" cy="26" r="6.5" fill="#ff5f57"/>
+    <circle cx="48" cy="26" r="6.5" fill="#febc2e"/>
+    <circle cx="70" cy="26" r="6.5" fill="#28c840"/>
+    <text x="450" y="31" text-anchor="middle" fill="#8b949e" font-size="13">Claude Code — model-guard statusline</text>
+
+    <text x="24" y="78" fill="#8b949e" font-size="13">① Running the model you pinned — all good</text>
+    <rect x="24" y="90" width="852" height="32" rx="5" fill="#3FB950"/>
+    <text x="36" y="111" fill="#000000" font-size="13" font-weight="bold">✔ Fable 5 · claude-fable-5  ┃  ⚡xhigh  ┃  ◔ 13%  ┃  👤 user@example.com</text>
+
+    <text x="24" y="178" fill="#8b949e" font-size="13">② Above your default — calm FYI, not an alarm</text>
+    <rect x="24" y="190" width="852" height="32" rx="5" fill="#0D47A1"/>
+    <text x="36" y="211" fill="#ffffff" font-size="13" font-weight="bold">⬆ above default: Fable 5 · claude-fable-5 (default: OPUS)  ┃  ⚡high  ┃  ◔ 22%  ┃  👤 user@example.com</text>
+
+    <text x="24" y="278" fill="#8b949e" font-size="13">③ Silent downgrade — the whole bar screams until you /model back</text>
+    <rect x="24" y="290" width="852" height="32" rx="5" fill="#B00020"/>
+    <text x="36" y="311" fill="#ffffff" font-size="13" font-weight="bold">🚨🚨🚨 MODEL DOWNGRADED! now: Haiku 4.5 (claude-haiku-4-5) &lt; FABLE  ┃  run /model to switch back NOW! 🚨 🚨 🚨</text>
+
+    <text x="24" y="378" fill="#8b949e" font-size="13">④ Other silent downgrades — inline red patches (thinking off · 5h rate-limit pressure)</text>
+    <rect x="24" y="390" width="852" height="32" rx="5" fill="#3FB950"/>
+    <text x="36" y="411" fill="#000000" font-size="13" font-weight="bold">✔ Fable 5 · claude-fable-5  ┃  ⚡xhigh</text>
+    <rect x="352" y="393" width="152" height="26" rx="4" fill="#B00020"/>
+    <text x="362" y="411" fill="#ffffff" font-size="13" font-weight="bold">🧠 thinking OFF!</text>
+    <rect x="512" y="393" width="118" height="26" rx="4" fill="#B00020"/>
+    <text x="522" y="411" fill="#ffffff" font-size="13" font-weight="bold">⏳ 5h 87%!</text>
+    <text x="642" y="411" fill="#000000" font-size="13" font-weight="bold">┃  👤 user@example.com</text>
+  </g>
+</svg>

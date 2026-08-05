@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 372" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace">
+  <rect x="1.5" y="1.5" width="897" height="369" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+  <circle cx="26" cy="26" r="6.5" fill="#ff5f57"/>
+  <circle cx="48" cy="26" r="6.5" fill="#febc2e"/>
+  <circle cx="70" cy="26" r="6.5" fill="#28c840"/>
+  <text x="450" y="31" text-anchor="middle" fill="#8b949e" font-size="13">/model-guard:setup — interactive, ~30 s, no copy-paste</text>
+
+  <text x="32" y="80" fill="#c9d1d9" font-size="14" font-weight="bold"><tspan fill="#58a6ff">?</tspan> Band language</text>
+  <text x="32" y="108" fill="#58a6ff" font-size="14" font-weight="bold">❯ ● Auto — follow Claude Code's language setting  (Recommended)</text>
+  <text x="32" y="134" fill="#8b949e" font-size="14">    ○ English</text>
+  <text x="32" y="160" fill="#8b949e" font-size="14">    ○ 中文</text>
+  <text x="32" y="186" fill="#8b949e" font-size="14">    ○ More… (日本語 · 한국어 · Español · Français · Deutsch · Português)</text>
+
+  <text x="32" y="230" fill="#c9d1d9" font-size="14" font-weight="bold"><tspan fill="#58a6ff">?</tspan> Show account email on the band?</text>
+  <text x="32" y="258" fill="#58a6ff" font-size="14" font-weight="bold">❯ ● Show  (Recommended)      <tspan fill="#8b949e" font-weight="normal">○ Hide</tspan></text>
+
+  <text x="32" y="300" fill="#6e7681" font-size="13">↑↓ move · enter confirm · type your own via Other</text>
+  <text x="32" y="336" fill="#3FB950" font-size="14" font-weight="bold">✔ done — script copied, statusLine registered (backup saved), band live in ~5 s</text>
+</svg>

@@ -1,0 +1,15 @@
+{
+  "name": "claude-model-guard",
+  "description": "Home of model-guard — the statusline that catches silent model downgrades in Claude Code.",
+  "owner": {
+    "name": "ventusff",
+    "url": "https://github.com/ventusff"
+  },
+  "plugins": [
+    {
+      "name": "model-guard",
+      "source": "./",
+      "description": "🚨 Statusline that catches silent model downgrades in Claude Code — theme-proof full-width alarm for model, reasoning effort, thinking state and rate-limit pressure."
+    }
+  ]
+}

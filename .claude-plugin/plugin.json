@@ -1,0 +1,21 @@
+{
+  "name": "model-guard",
+  "displayName": "Model Guard",
+  "version": "1.0.0",
+  "description": "🚨 Statusline that catches silent model downgrades in Claude Code — theme-proof full-width alarm for model, reasoning effort, thinking state and rate-limit pressure. 8 languages, interactive 30-second setup.",
+  "author": {
+    "name": "ventusff",
+    "url": "https://github.com/ventusff"
+  },
+  "homepage": "https://github.com/ventusff/claude-model-guard",
+  "repository": "https://github.com/ventusff/claude-model-guard",
+  "license": "MIT",
+  "keywords": [
+    "statusline",
+    "model",
+    "downgrade",
+    "alarm",
+    "rate-limit",
+    "monitor"
+  ]
+}
