@@ -57,7 +57,7 @@ echo "== driver timed out, user confirms the switch later: default still restore
 s=s1b
 switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 auto >/dev/null; wait_status $s switching
 for i in $(seq 1 60); do grep -q 'TEXT /model' "$MG_STATE_DIR/$s.log" 2>/dev/null && break; sleep 0.1; done
-mg_state_update $s '.status="pending" | .note="switch_not_observed"'
+mg_state_update $s '.status="stopped" | .note="switch_not_observed" | .turn_stopped=true'
 jq '.model="claude-opus-5[1m]"' "$MODEL_GUARD_SETTINGS" > "$tmp/x" && mv "$tmp/x" "$MODEL_GUARD_SETTINGS"
 switch $s claude-opus-4-8 'claude-opus-5[1m]' command >/dev/null
 check "late confirmation still counts as automatic" '[ "$(mg_state_get $s recovered_by)" = auto ]'
@@ -73,26 +73,36 @@ switch $s claude-opus-4-8 'claude-opus-5[1m]' command >/dev/null
 for i in $(seq 1 100); do grep -q ' done' "$MG_STATE_DIR/$s.log" 2>/dev/null && break; sleep 0.1; done
 check "no continue prompt after resume" '! grep -q "TEXT Continue" "$MG_STATE_DIR/$s.log" && grep -q " done" "$MG_STATE_DIR/$s.log"'
 
-echo "== the recovery model itself gets flagged: halted, two-strike release"
+echo "== the recovery model itself gets flagged: stop once, then hands off"
 s=s3
 switch $s claude-opus-5 claude-opus-4-8 auto >/dev/null
-check "halted with note target_flagged" '[ "$(status $s)" = halted ] && [ "$(mg_state_get $s note)" = target_flagged ]'
+check "stopped with note target_flagged" '[ "$(status $s)" = stopped ] && [ "$(mg_state_get $s note)" = target_flagged ]'
 out=$(pretool $s)
-check "PreToolUse stops while halted" 'jq -e ".continue==false" <<<"$out" >/dev/null'
-check "halted reason explains resend" 'jq -r .stopReason <<<"$out" | grep -q "resend"'
-out=$(prompt $s)
-check "first prompt blocked with explanation" 'jq -e ".decision==\"block\"" <<<"$out" >/dev/null && jq -r .reason <<<"$out" | grep -q "Opus 4.8"'
-out=$(prompt $s)
-check "second prompt released" '[ -z "$out" ] && [ "$(status $s)" = released ]'
-check "tools allowed once released" '[ -z "$(pretool $s)" ]'
+check "first tool call after the downgrade is stopped" 'jq -e ".continue==false" <<<"$out" >/dev/null'
+check "stop reason says pick one with /model" 'jq -r .stopReason <<<"$out" | grep -q "pick one with /model"'
+check "prompts are never blocked once stopped" '[ -z "$(prompt $s)" ]'
+check "later tool calls pass" '[ -z "$(pretool $s)" ]'
 
-echo "== no keystroke channel: pending, manual instructions"
+echo "== no keystroke channel: plain stop"
 s=s4
 printf 'LANGUAGE=zh\nRECOVER_CHANNEL=none\n' > "$MODEL_GUARD_CONF"
 switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 auto >/dev/null
-check "pending with note no_channel" '[ "$(status $s)" = pending ] && [ "$(mg_state_get $s note)" = no_channel ]'
+check "stopped with note no_channel" '[ "$(status $s)" = stopped ] && [ "$(mg_state_get $s note)" = no_channel ]'
+check "no driver spawned" '[ ! -e "$MG_STATE_DIR/$s.log" ]'
 out=$(pretool $s)
 check "zh stop reason asks for /model" 'jq -r .stopReason <<<"$out" | grep -q "请 /model 切到 Opus 5 (1M)"'
+check "turn marked stopped" '[ "$(mg_state_get $s turn_stopped)" = true ]'
+check "next tool call passes" '[ -z "$(pretool $s)" ]'
+check "prompts pass" '[ -z "$(prompt $s)" ]'
+s=s4b
+switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 auto >/dev/null
+hook "{hook_event_name:\"Stop\",session_id:\"$s\",stop_hook_active:false}" >/dev/null
+check "a turn that ends by itself counts as stopped" '[ "$(mg_state_get $s turn_stopped)" = true ] && [ -z "$(pretool $s)" ]'
+s=s4c
+switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 resume >/dev/null
+check "resume without channel: nothing to stop" '[ "$(status $s)" = stopped ] && [ -z "$(pretool $s)" ]'
+switch $s claude-opus-4-8 'claude-opus-5[1m]' picker >/dev/null
+check "manual switch after a plain stop: recovered by user" '[ "$(status $s)" = recovered ] && [ "$(mg_state_get $s recovered_by)" = user ]'
 printf 'LANGUAGE=en\nRECOVER_CHANNEL=dryrun\nRECOVER_MODEL=claude-opus-5[1m]\nRECOVER_EFFORT=max\nRECOVER_MAX=2\n' > "$MODEL_GUARD_CONF"
 
 echo "== attempts cap"
@@ -102,7 +112,7 @@ switch $s claude-opus-4-8 'claude-opus-5[1m]' command >/dev/null
 switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 auto >/dev/null; wait_status $s switching
 switch $s claude-opus-4-8 'claude-opus-5[1m]' command >/dev/null
 switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 auto >/dev/null
-check "third automatic downgrade is halted (RECOVER_MAX=2)" '[ "$(status $s)" = halted ] && [ "$(mg_state_get $s note)" = too_many_recoveries ]'
+check "third automatic downgrade only stops (RECOVER_MAX=2)" '[ "$(status $s)" = stopped ] && [ "$(mg_state_get $s note)" = too_many_recoveries ]'
 
 echo "== non-downgrades are ignored"
 s=s6
@@ -118,7 +128,7 @@ hook "{hook_event_name:\"SessionStart\",session_id:\"$s\",source:\"compact\"}" >
 check "compact keeps state" '[ -e "$(mg_state_file $s)" ]'
 out=$(hook "{hook_event_name:\"SessionStart\",session_id:\"$s\",source:\"startup\"}")
 check "startup clears state" '[ ! -e "$(mg_state_file $s)" ]'
-check "no channel hint when channel is configured" '[ -z "$out" ]'
+check "session start is silent" '[ -z "$out" ]'
 switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 auto >/dev/null
 hook "{hook_event_name:\"SessionEnd\",session_id:\"$s\",reason:\"other\"}" >/dev/null
 check "session end clears state" '[ ! -e "$(mg_state_file $s)" ]'
@@ -127,7 +137,7 @@ switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 auto >/dev/null
 check "RECOVER=off disables everything" '[ ! -e "$(mg_state_file $s)" ]'
 printf 'LANGUAGE=en\n' > "$MODEL_GUARD_CONF"
 out=$(hook "{hook_event_name:\"SessionStart\",session_id:\"$s\",source:\"startup\"}")
-check "channel hint when auto finds no channel" 'jq -r .systemMessage <<<"$out" | grep -q "no keystroke channel"'
+check "session start is silent without a channel too" '[ -z "$out" ]'
 
 echo "== statusline bands"
 sl="$root/scripts/statusline.sh"
@@ -137,6 +147,13 @@ s=s8
 switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 auto >/dev/null; wait_status $s switching
 out=$(printf '{"session_id":"%s","model":{"id":"claude-opus-4-8","display_name":"Opus 4.8"},"effort":{"level":"xhigh"}}' $s | HOME="$tmp" "$sl")
 check "switching band" 'grep -q "switching to Opus 5 (1M)" <<<"$out"'
+mg_state_update $s '.status="stopped" | .note="no_channel"'
+out=$(printf '{"session_id":"%s","model":{"id":"claude-opus-4-8","display_name":"Opus 4.8"}}' $s | HOME="$tmp" "$sl")
+check "stopped band names the /model target" 'grep -q "stopped · /model to Opus 5 (1M)" <<<"$out"'
+mg_state_update $s '.status="stopped" | .note="target_flagged"'
+out=$(printf '{"session_id":"%s","model":{"id":"claude-opus-4-8","display_name":"Opus 4.8"}}' $s | HOME="$tmp" "$sl")
+check "stopped band after a flagged recovery model" 'grep -q "pick one with /model" <<<"$out"'
+mg_state_update $s '.status="switching"'
 switch $s claude-opus-4-8 'claude-opus-5[1m]' command >/dev/null
 out=$(printf '{"session_id":"%s","model":{"id":"claude-opus-5[1m]","display_name":"Opus 5 (1M context)"},"effort":{"level":"max"}}' $s | HOME="$tmp" "$sl")
 check "recovered band is calm and names the switch" 'grep -q "Fable 5.1 (1M) flagged → switched to Opus 5 (1M)" <<<"$out" && ! grep -q "DOWNGRADED" <<<"$out"'

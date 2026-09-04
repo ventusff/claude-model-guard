@@ -28,7 +28,7 @@
 #
 # Recovery episodes (plugin hooks, see lib.sh) are read from the per-session state
 # file under $XDG_RUNTIME_DIR/model-guard and get their own band:
-#   red    🚨 downgraded by a flag, stopped / switching to the recovery model
+#   red    🚨 downgraded by a flag: stopped, or switching to the recovery model
 #   amber  🔁 recovered: running on the recovery model after a flag
 #
 # Config (~/.claude/model-guard.conf, KEY=VALUE per line, everything optional):
@@ -97,56 +97,56 @@ case "$lang" in
       T_EFF="⚡%s < 默认%s!"; T_THINK="🧠思考OFF!"; T_LIMIT="⏳5h额度 %s%%!"
       T_ACCT="账号未知(API key?)"
       T_SWITCH="🚨 被 flag:%s → %s · 自动切回 %s 中…"; T_MANUAL="🚨 被 flag:%s → %s · 已停 · /model 切到 %s"
-      T_HALTED="🚨 被 flag 降到 %s · 已停 · /model 自选或再发一次放行"; T_KEPT="⚠ 留在 %s 上继续(从 %s 降级)"
+      T_HALTED="🚨 被 flag 降到 %s · 已停 · /model 自选"
       T_RECOV="🔁 %s 被 flag → 已切到 %s";;
   ja) T_DOWN="🚨🚨🚨 モデルがダウングレード!現在: %s (%s) < %s"; T_BACK="今すぐ /model で戻して!"
       T_UP="⬆ デフォルトより上位: %s · %s(デフォルト %s)"
       T_EFF="⚡%s < デフォルト%s!"; T_THINK="🧠思考OFF!"; T_LIMIT="⏳5h上限 %s%%!"
       T_ACCT="アカウント不明(API key?)"
       T_SWITCH="🚨 フラグ:%s → %s · %s へ自動切替中…"; T_MANUAL="🚨 フラグ:%s → %s · 停止 · /model で %s へ"
-      T_HALTED="🚨 フラグで %s に格下げ · 停止 · /model か再送で続行"; T_KEPT="⚠ %s のまま続行(%s から格下げ)"
+      T_HALTED="🚨 フラグで %s に格下げ · 停止 · /model で選択"
       T_RECOV="🔁 %s がフラグ → %s に切替済み";;
   ko) T_DOWN="🚨🚨🚨 모델 다운그레이드! 현재: %s (%s) < %s"; T_BACK="지금 /model 로 되돌리세요!"
       T_UP="⬆ 기본보다 상위: %s · %s (기본 %s)"
       T_EFF="⚡%s < 기본 %s!"; T_THINK="🧠사고 OFF!"; T_LIMIT="⏳5h한도 %s%%!"
       T_ACCT="계정 알 수 없음 (API key?)"
       T_SWITCH="🚨 플래그: %s → %s · %s (으)로 자동 전환 중…"; T_MANUAL="🚨 플래그: %s → %s · 중지 · /model 로 %s"
-      T_HALTED="🚨 플래그로 %s 강등 · 중지 · /model 또는 재전송"; T_KEPT="⚠ %s 에서 계속 (%s 에서 강등)"
+      T_HALTED="🚨 플래그로 %s 강등 · 중지 · /model 로 선택"
       T_RECOV="🔁 %s 플래그 → %s 로 전환됨";;
   es) T_DOWN="🚨🚨🚨 ¡MODELO DEGRADADO! ahora: %s (%s) < %s"; T_BACK="¡/model para volver YA!"
       T_UP="⬆ superior al predeterminado: %s · %s (predet.: %s)"
       T_EFF="¡⚡%s < predet. %s!"; T_THINK="🧠 ¡thinking OFF!"; T_LIMIT="¡⏳ límite 5h %s%%!"
       T_ACCT="cuenta desconocida (¿API key?)"
       T_SWITCH="🚨 marcado: %s → %s · cambiando a %s…"; T_MANUAL="🚨 marcado: %s → %s · detenido · /model a %s"
-      T_HALTED="🚨 marcado, bajado a %s · detenido · /model o reenviar"; T_KEPT="⚠ sigues en %s (bajado desde %s)"
+      T_HALTED="🚨 marcado, bajado a %s · detenido · elige con /model"
       T_RECOV="🔁 %s marcado → ahora en %s";;
   fr) T_DOWN="🚨🚨🚨 MODÈLE RÉTROGRADÉ ! actuel : %s (%s) < %s"; T_BACK="/model pour revenir !"
       T_UP="⬆ au-dessus du défaut : %s · %s (défaut : %s)"
       T_EFF="⚡%s < défaut %s !"; T_THINK="🧠 thinking OFF !"; T_LIMIT="⏳ limite 5h %s%% !"
       T_ACCT="compte inconnu (API key ?)"
       T_SWITCH="🚨 signalé : %s → %s · bascule vers %s…"; T_MANUAL="🚨 signalé : %s → %s · arrêté · /model vers %s"
-      T_HALTED="🚨 signalé, rétrogradé à %s · arrêté · /model ou renvoyer"; T_KEPT="⚠ reste sur %s (rétrogradé depuis %s)"
+      T_HALTED="🚨 signalé, rétrogradé à %s · arrêté · choisis avec /model"
       T_RECOV="🔁 %s signalé → passé à %s";;
   de) T_DOWN="🚨🚨🚨 MODELL HERABGESTUFT! jetzt: %s (%s) < %s"; T_BACK="sofort /model zurückwechseln!"
       T_UP="⬆ über Standard: %s · %s (Standard: %s)"
       T_EFF="⚡%s < Standard %s!"; T_THINK="🧠 Thinking AUS!"; T_LIMIT="⏳ 5h-Limit %s%%!"
       T_ACCT="Konto unbekannt (API key?)"
       T_SWITCH="🚨 markiert: %s → %s · Wechsel zu %s…"; T_MANUAL="🚨 markiert: %s → %s · gestoppt · /model zu %s"
-      T_HALTED="🚨 markiert, herabgestuft auf %s · gestoppt · /model oder erneut senden"; T_KEPT="⚠ bleibt auf %s (herabgestuft von %s)"
+      T_HALTED="🚨 markiert, herabgestuft auf %s · gestoppt · mit /model wählen"
       T_RECOV="🔁 %s markiert → gewechselt zu %s";;
   pt) T_DOWN="🚨🚨🚨 MODELO REBAIXADO! agora: %s (%s) < %s"; T_BACK="rode /model para voltar JÁ!"
       T_UP="⬆ acima do padrão: %s · %s (padrão: %s)"
       T_EFF="⚡%s < padrão %s!"; T_THINK="🧠 thinking OFF!"; T_LIMIT="⏳ limite 5h %s%%!"
       T_ACCT="conta desconhecida (API key?)"
       T_SWITCH="🚨 sinalizado: %s → %s · trocando para %s…"; T_MANUAL="🚨 sinalizado: %s → %s · parado · /model para %s"
-      T_HALTED="🚨 sinalizado, rebaixado para %s · parado · /model ou reenviar"; T_KEPT="⚠ segue em %s (rebaixado de %s)"
+      T_HALTED="🚨 sinalizado, rebaixado para %s · parado · escolha com /model"
       T_RECOV="🔁 %s sinalizado → agora em %s";;
   *)  T_DOWN="🚨🚨🚨 MODEL DOWNGRADED! now: %s (%s) < %s"; T_BACK="run /model to switch back NOW!"
       T_UP="⬆ above default: %s · %s (default: %s)"
       T_EFF="⚡%s < default %s!"; T_THINK="🧠 thinking OFF!"; T_LIMIT="⏳ 5h limit %s%%!"
       T_ACCT="account unknown (API key?)"
       T_SWITCH="🚨 FLAGGED: %s → %s · switching to %s…"; T_MANUAL="🚨 FLAGGED: %s → %s · stopped · /model to %s"
-      T_HALTED="🚨 FLAGGED, downgraded to %s · stopped · /model or resend"; T_KEPT="⚠ staying on %s (downgraded from %s)"
+      T_HALTED="🚨 FLAGGED, downgraded to %s · stopped · pick one with /model"
       T_RECOV="🔁 %s flagged → switched to %s";;
 esac
 
@@ -223,15 +223,16 @@ if [ -n "$state" ]; then
   st_from=$(pretty "$(printf '%s' "$state" | jq -r '.from_model // empty')")
   st_to=$(pretty "$(printf '%s' "$state" | jq -r '.to_model // empty')")
   st_target=$(pretty "$(printf '%s' "$state" | jq -r '.target_model // empty')")
-  st_channel=$(printf '%s' "$state" | jq -r '.channel // "none"')
+  st_note=$(printf '%s' "$state" | jq -r '.note // empty')
   st_recovered_to=$(printf '%s' "$state" | jq -r '.recovered_to // empty')
   case "$st_status" in
-    switching) band=$ALARM; is_alarm=1; printf -v head_txt "$T_SWITCH" "$st_from" "$st_to" "$st_target";;
-    pending)   band=$ALARM; is_alarm=1
-               if [ "$st_channel" != none ]; then printf -v head_txt "$T_SWITCH" "$st_from" "$st_to" "$st_target"
-               else printf -v head_txt "$T_MANUAL" "$st_from" "$st_to" "$st_target"; fi;;
-    halted)    band=$ALARM; is_alarm=1; printf -v head_txt "$T_HALTED" "$st_to";;
-    released)  band=$ALARM; is_alarm=1; printf -v head_txt "$T_KEPT" "$st_to" "$st_from";;
+    pending|switching) band=$ALARM; is_alarm=1; printf -v head_txt "$T_SWITCH" "$st_from" "$st_to" "$st_target";;
+    stopped)   band=$ALARM; is_alarm=1
+               case "$st_note" in
+                 target_flagged|downgraded_again|too_many_recoveries|target_not_stronger)
+                   printf -v head_txt "$T_HALTED" "$st_to";;
+                 *) printf -v head_txt "$T_MANUAL" "$st_from" "$st_to" "$st_target";;
+               esac;;
     recovered) if same_model "$model_id" "$st_recovered_to"; then
                  band=$RECOV; printf -v head_txt "$T_RECOV" "$st_from" "$(pretty "$st_recovered_to")"
                fi;;

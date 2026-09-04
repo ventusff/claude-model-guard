@@ -47,18 +47,18 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 
 看见降级只是一半。眼下最常见的静默降级是**安全过滤器 flag**：Fable（或 Opus 5）的过滤器判定某条消息可疑，Claude Code 就把它改用 Opus 4.8 重跑一遍——然后整个 session 都留在 Opus 4.8 上。装上 1.1 的钩子后，session 会改成：
 
-1. **停**——下一次工具调用被拒、这一轮直接结束（`PreToolUse`）；模型没换回来之前，新发的提示词会被拦住（`UserPromptSubmit`）；
+1. **停**——下一次工具调用被拒、这一轮直接结束（`PreToolUse`）；
 2. **切**——一个独立的恢复进程往 session 自己的终端里按 Esc、输入 `/model <恢复模型>` 和 `/effort <强度>`，并等 Claude Code 的 `PostModelSwitch` 事件确认切换成功（插件的 `PreModelSwitch` 钩子回答 *allow*，所以不会被「缓存失效，确认切换？」的对话框卡住）；
 3. **续**——发出继续提示词，被打断的任务在恢复模型上接着做。
 
 默认恢复到 `claude-opus-5[1m]`、强度 `max`，继续提示词是「继续」（横幅语言为中文时；其他语言是 `Continue.`）。实测从降级到恢复模型吐出第一个字，整个往返约 8 秒。
 
-往终端里打字需要一条**按键通道**：tmux 面板（`send-keys`），或开启了 socket 远程控制的 kitty（`kitty.conf` 里加 `allow_remote_control socket-only` 和 `listen_on unix:@kitty`，重启 kitty；`setup` 会主动提出帮你加）。没有通道时「停」照样生效，横幅会写明该 `/model` 切到哪，你再发一次提示词就放行。
+第 2、3 步只在终端能被驱动时才存在：tmux 面板（`send-keys`），或开启了 socket 远程控制的 kitty（`kitty.conf` 里加 `allow_remote_control socket-only` 和 `listen_on unix:@kitty`，重启 kitty；`setup` 会主动提出帮你加）。其他任何环境下插件只做第 1 步：这一轮停一次，横幅写明该 `/model` 切到哪，钩子不再插手。
 
 两个值得知道的细节：
 
 - 交互式 session 里 `/model <id>` 会顺手把 `<id>` 存成你新 session 的默认模型。插件在自己切完之后会把原来的默认值改回去，所以一次恢复不会改变你明天开新 session 用什么模型。
-- 如果恢复模型自己也被 flag（Opus 5 → Opus 4.8），或者同一个 session 被降级超过 `RECOVER_MAX` 次，插件就只停不切。横幅会说明；用 `/model` 自己选，或者把提示词再发一次，明确表示就留在回退模型上继续。
+- 如果恢复模型自己也被 flag（Opus 5 → Opus 4.8），或者同一个 session 被降级超过 `RECOVER_MAX` 次，插件就只停不切。横幅会说明，用 `/model` 自己选。
 
 ## 安装
 
@@ -141,11 +141,10 @@ Claude Code 的钩子能看见模型切换（`PostModelSwitch` 带 `from_model`�
 
 | 状态 | 含义 |
 |---|---|
-| `pending` | 已降级、已停；恢复进程尚未开始（或没有按键通道） |
+| `pending` | 已降级且有按键通道，恢复进程正在启动 |
 | `switching` | 恢复进程正在输入切换命令 |
 | `recovered` | 降级之后模型换过了（恢复进程换的，或你自己换的） |
-| `halted` | 已降级但不自动切：恢复模型自己也被 flag、恢复途中又被降级、或达到 `RECOVER_MAX` |
-| `released` | 停下之后你把提示词发了两次，选择留在回退模型上 |
+| `stopped` | 已降级但不自动切（没有通道、恢复模型自己也被 flag、恢复途中又被降级、或达到 `RECOVER_MAX`）：这一轮停一次，之后钩子一律放行 |
 
 `SessionStart` 会清掉过期状态（被锁定的回退模型在恢复会话时会以 `source=resume` 的 `PostModelSwitch` 重新出现，这会触发切换但不会发继续提示词）；`SessionEnd` 负责收尾。`tests/run.sh` 用合成的钩子输入和 `dryrun` 通道把整台状态机跑一遍。
 

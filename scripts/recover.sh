@@ -69,7 +69,7 @@ send_line() { send_text "$1"; sleep 0.15; send_key Enter enter; }
 # until its echo shows up (never with the dryrun channel).
 transcript=$(jq -r '.transcript_path // empty' <<<"$state")
 [ -f "$transcript" ] || transcript=$(ls "$HOME"/.claude/projects/*/"$sid".jsonl 2>/dev/null | head -n1)
-tcount() { [ -f "$transcript" ] && grep -cF -- "$1" "$transcript" || printf '0'; }
+tcount() { if [ -f "$transcript" ]; then grep -cF -- "$1" "$transcript" || true; else printf '0'; fi; }
 wait_marker() {
   local pat="$1" secs="$2" before="$3" i
   [ "$channel" = dryrun ] && return 0
@@ -138,8 +138,8 @@ say "sent /model $target"
 if ! wait_state recovered 30; then
   st=$(mg_state_get "$sid" status)
   if [ "$st" = switching ]; then
-    mg_state_update "$sid" '.status="pending" | .note="switch_not_observed"'
-    say "model switch not observed within 30s; back to pending"
+    mg_state_update "$sid" '.status="stopped" | .note="switch_not_observed" | .turn_stopped=true'
+    say "model switch not observed within 30s; leaving the session stopped"
     mg_notify "$(mg_text notify_t)" "$(mg_text notify_fail "$dtarget" "switch not observed")"
   fi
   exit 1

@@ -4,12 +4,13 @@
 
 Auto-recovery from safeguard-flag downgrades.
 
-- Hooks (`PostModelSwitch`, `PreModelSwitch`, `PreToolUse`, `UserPromptSubmit`,
-  `SessionStart`, `SessionEnd`): an automatic downgrade stops the turn, a
-  detached driver switches the session to `RECOVER_MODEL` at `RECOVER_EFFORT`
-  through the terminal's remote control (tmux pane or kitty socket) and resumes
-  the task with `RECOVER_PROMPT`; the previous default model is restored after
-  the switch. Per-session state in `$XDG_RUNTIME_DIR/model-guard/`.
+- Hooks (`PostModelSwitch`, `PreModelSwitch`, `PreToolUse`, `Stop`,
+  `UserPromptSubmit`, `SessionStart`, `SessionEnd`): an automatic downgrade
+  stops the turn. Where the terminal can be driven (tmux pane or kitty socket)
+  a detached driver then switches the session to `RECOVER_MODEL` at
+  `RECOVER_EFFORT` and resumes the task with `RECOVER_PROMPT`, restoring the
+  previous default model afterwards; anywhere else the stop is all that
+  happens. Per-session state in `$XDG_RUNTIME_DIR/model-guard/`.
 - Statusline: amber 🔁 band while running on the recovery model; red bands
   for stopped / switching / halted; strength ranking now compares versions
   within a family (`claude-opus-5 > claude-opus-4-8`) instead of alarming on

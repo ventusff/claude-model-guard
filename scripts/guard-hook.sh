@@ -4,20 +4,23 @@
 # recovery state (lib.sh) and answers with hook JSON on stdout.
 #
 #   PostModelSwitch  source auto|resume and to_model weaker than from_model:
-#                    the session was downgraded behind the user's back. Record
-#                    the episode and start the detached recovery driver when a
-#                    keystroke channel exists. Any other switch ends the episode.
+#                    the session was downgraded behind the user's back. With a
+#                    keystroke channel: record "pending" and start the detached
+#                    recovery driver. Without one (or when an automatic switch
+#                    is not allowed): record "stopped". Any other switch ends
+#                    the episode.
 #   PreModelSwitch   the switch the recovery driver typed: answer "allow", which
 #                    skips Claude Code's cache-miss confirmation dialog. Any other
 #                    switch gets no decision.
-#   PreToolUse       pending|switching|halted: deny the tool and stop the turn.
-#   UserPromptSubmit switching: block (recovery in flight). pending|halted:
-#                    block once with an explanation; the next submission goes
-#                    through and the session is marked released.
+#   PreToolUse       pending|switching: deny the tool and stop the turn (the
+#                    driver is taking over). stopped: deny once and end the
+#                    turn; later tool calls pass.
+#   Stop             stopped: the turn ended by itself; nothing left to stop.
+#   UserPromptSubmit pending|switching: block, the driver is typing into the
+#                    session. Otherwise pass.
 #   SessionStart     startup|clear|resume: forget stale state for this session
 #                    (a latched fallback re-announces itself via
-#                    PostModelSwitch source=resume). Also hints once per session
-#                    when recovery is on but no keystroke channel exists.
+#                    PostModelSwitch source=resume).
 #   SessionEnd       forget the session's state.
 set -u
 command -v jq >/dev/null 2>&1 || exit 0
@@ -49,9 +52,12 @@ reason_tail() {
   target=$(mg_display_name "$(jq -r '.target_model // empty' <<<"$state")")
   channel=$(jq -r '.channel // "none"' <<<"$state")
   case "$status" in
-    switching) mg_text tail_switch "$target";;
-    pending)   if [ "$channel" != none ]; then mg_text tail_switch "$target"; else mg_text tail_manual "$target"; fi;;
-    halted)    mg_text tail_halted "$target" "$to";;
+    pending|switching) mg_text tail_switch "$target";;
+    stopped)
+      case "$(jq -r '.note // empty' <<<"$state")" in
+        target_flagged|downgraded_again|too_many_recoveries|target_not_stronger) mg_text tail_halted "$target" "$to";;
+        *) mg_text tail_manual "$target";;
+      esac;;
   esac
 }
 # Stop/deny text for the current state.
@@ -74,31 +80,33 @@ begin_episode() {
   channel=$(mg_channel)
   attempts=$((attempts + 1))
   if [ "$status" = pending ] || [ "$status" = switching ]; then
-    new_status=halted; note=downgraded_again
+    new_status=stopped; note=downgraded_again
   elif mg_same_model "$from" "$target"; then
-    new_status=halted; note=target_flagged
+    new_status=stopped; note=target_flagged
   elif ! mg_is_downgrade "$target" "$to"; then
-    new_status=halted; note=target_not_stronger
+    new_status=stopped; note=target_not_stronger
   elif [ "$attempts" -gt "$maxn" ] 2>/dev/null; then
-    new_status=halted; note=too_many_recoveries
+    new_status=stopped; note=too_many_recoveries
   elif [ "$channel" = none ]; then
-    new_status=pending; note=no_channel
+    new_status=stopped; note=no_channel
   else
     new_status=pending
   fi
   [ "$source" = auto ] && cont=true
+  # A downgrade restored on resume has no running turn: nothing to stop.
+  local turn_stopped=false; [ "$source" = resume ] && turn_stopped=true
   mg_state_update "$sid" \
     '{status: $st, from_model: $from, to_model: $to, target_model: $t, target_effort: $e,
       default_model: $dm, attempts: ($n | tonumber), source: $src, channel: $ch, note: $note,
-      continue: ($cont == "true"), at: $at, warned: false, transcript_path: $tp}' \
+      continue: ($cont == "true"), at: $at, turn_stopped: ($ts == "true"), transcript_path: $tp}' \
     --arg st "$new_status" --arg from "$from" --arg to "$to" --arg t "$target" --arg e "$effort" \
     --arg dm "$(mg_settings_model)" --arg n "$attempts" --arg src "$source" --arg ch "$channel" \
-    --arg note "$note" --arg cont "$cont" --arg at "$(date -Is)" \
+    --arg note "$note" --arg cont "$cont" --arg at "$(date -Is)" --arg ts "$turn_stopped" \
     --arg tp "$(jq -r '.transcript_path // empty' <<<"$input")"
   mg_debug "episode $new_status ($note) from=$from to=$to target=$target channel=$channel attempts=$attempts"
   local dfrom dto dtarget
   dfrom=$(mg_display_name "$from"); dto=$(mg_display_name "$to"); dtarget=$(mg_display_name "$target")
-  if [ "$new_status" = pending ] && [ "$channel" != none ]; then
+  if [ "$new_status" = pending ]; then
     setsid -f "$plugin_root/scripts/recover.sh" "$sid" </dev/null >/dev/null 2>&1
     mg_notify "$(mg_text notify_t)" "$(mg_text notify_go "$dfrom" "$dto" "$dtarget")" normal
   else
@@ -122,7 +130,7 @@ end_episode() {
   if [ "$status" = switching ] || { [ "$(jq -r '.typed_switch // false' <<<"$state")" = true ] && mg_same_model "$to" "$(jq -r '.target_model // empty' <<<"$state")"; }; then
     by=auto
   fi
-  mg_state_update "$sid" '.status="recovered" | .recovered_to=$to | .recovered_by=$by | .recovered_at=$at | .warned=false' \
+  mg_state_update "$sid" '.status="recovered" | .recovered_to=$to | .recovered_by=$by | .recovered_at=$at' \
     --arg to "$to" --arg by "$by" --arg at "$(date -Is)"
   mg_debug "episode recovered to=$to by=$by source=$source"
   [ "$by" = auto ] && mg_restore_default_model "$sid"
@@ -156,47 +164,40 @@ on_pre_tool_use() {
   state=$(mg_state_read "$sid")
   status=$(jq -r '.status // empty' <<<"$state")
   case "$status" in
-    pending|switching|halted) emit_stop "$(reason_for "$state")";;
+    pending|switching) emit_stop "$(reason_for "$state")";;
+    stopped)
+      [ "$(jq -r '.turn_stopped // false' <<<"$state")" = true ] && return 0
+      mg_state_update "$sid" '.turn_stopped=true'
+      emit_stop "$(reason_for "$state")";;
   esac
 }
 
+on_stop() {
+  [ "$(mg_state_get "$sid" status)" = stopped ] || return 0
+  mg_state_update "$sid" '.turn_stopped=true'
+}
+
 on_prompt() {
-  local state status warned from to target
+  local state status to target
   state=$(mg_state_read "$sid")
   status=$(jq -r '.status // empty' <<<"$state")
   case "$status" in
-    switching)
+    pending|switching)
       to=$(mg_display_name "$(jq -r '.to_model' <<<"$state")")
       target=$(mg_display_name "$(jq -r '.target_model' <<<"$state")")
       emit_block "$(mg_text block_wait "$to" "$target")";;
-    pending|halted)
-      warned=$(jq -r '.warned // false' <<<"$state")
-      if [ "$warned" = true ]; then
-        mg_state_update "$sid" '.status="released" | .released_at=$at' --arg at "$(date -Is)"
-        mg_debug "released on user's second prompt"
-        return 0
-      fi
-      mg_state_update "$sid" '.warned=true'
-      to=$(mg_display_name "$(jq -r '.to_model' <<<"$state")")
-      from=$(mg_display_name "$(jq -r '.from_model' <<<"$state")")
-      emit_block "$(mg_text block_first "$to" "$from" "$to")";;
   esac
 }
 
 on_session_start() {
-  local source
-  source=$(jq -r '.source // "startup"' <<<"$input")
-  [ "$source" = compact ] || mg_state_clear "$sid"
-  [ "$(mg_conf_get SETUP_HINT)" != off ] || return 0
-  [ "$(mg_conf_or RECOVER_CHANNEL auto)" = auto ] || return 0
-  [ "$(mg_channel)" = none ] || return 0
-  jq -n --arg m "$(mg_text hint_chan)" '{systemMessage: $m}'
+  [ "$(jq -r '.source // "startup"' <<<"$input")" = compact ] || mg_state_clear "$sid"
 }
 
 case "$event" in
   PreModelSwitch)   on_pre_model_switch;;
   PostModelSwitch)  on_model_switch;;
   PreToolUse)       on_pre_tool_use;;
+  Stop)             on_stop;;
   UserPromptSubmit) on_prompt;;
   SessionStart)     on_session_start;;
   SessionEnd)       mg_state_clear "$sid";;

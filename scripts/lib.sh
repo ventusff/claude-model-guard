@@ -17,11 +17,13 @@
 #
 # State: one JSON file per session under $XDG_RUNTIME_DIR/model-guard
 # (override with MODEL_GUARD_STATE_DIR). status is one of
-#   pending    downgraded, turn stopped, no keystroke channel or recovery not started
-#   switching  recovery driver is typing the model switch
-#   recovered  the session model changed after the downgrade (auto or by hand)
-#   halted     downgraded but automatic recovery is not allowed; stays stopped
-#   released   the user chose to keep working on the downgraded model
+#   pending    downgraded with a keystroke channel; the recovery driver is starting
+#   switching  the recovery driver is typing the model switch
+#   recovered  the session model changed after the downgrade (driver or by hand)
+#   stopped    downgraded, no automatic switch: the turn is stopped once
+#              (turn_stopped) and the hooks stay out of the way afterwards;
+#              note says why (no_channel, target_flagged, too_many_recoveries,
+#              downgraded_again, target_not_stronger, switch_not_observed)
 
 MG_VERSION="1.1.0"
 MG_CONF="${MODEL_GUARD_CONF:-$HOME/.claude/model-guard.conf}"
@@ -202,13 +204,11 @@ mg_text() {
     zh:stop)        fmt="🚨 model-guard：%s 被 flag，会话被降到 %s，已停止。";;
     zh:tail_switch) fmt="正在自动切到 %s…";;
     zh:tail_manual) fmt="请 /model 切到 %s 后重发。";;
-    zh:tail_halted) fmt="%s 也会被 flag，不再自动切换：/model 自选模型，或再发一次就留在 %s 上继续。";;
+    zh:tail_halted) fmt="%s 也会被 flag，不再自动切换，请 /model 自选。";;
     zh:block_wait)  fmt="🚨 model-guard：正在从 %s 自动切到 %s，请稍等；若 30 秒内没切成功，/model 手动切。";;
-    zh:block_first) fmt="🚨 model-guard：当前仍是 %s（从 %s 降级）。/model 换模型后重发；或再发一次，就留在 %s 上继续。";;
     zh:band_switch) fmt="🚨 被 flag：%s → %s · 自动切回 %s 中…";;
     zh:band_manual) fmt="🚨 被 flag：%s → %s · 已停 · /model 切到 %s";;
-    zh:band_halted) fmt="🚨 被 flag 降到 %s · 已停 · /model 自选或再发一次放行";;
-    zh:band_kept)   fmt="⚠ 留在 %s 上继续（从 %s 降级）";;
+    zh:band_halted) fmt="🚨 被 flag 降到 %s · 已停 · /model 自选";;
     zh:band_recov)  fmt="🔁 %s 被 flag → 已切到 %s";;
     zh:notify_t)    fmt="model-guard：模型被 flag 降级";;
     zh:notify_go)   fmt="%s → %s，已停止，正在切到 %s 并继续";;
@@ -216,17 +216,14 @@ mg_text() {
     zh:notify_fail) fmt="切到 %s 没有成功（%s），会话保持停止";;
     zh:notify_stop) fmt="%s → %s，已停止；%s";;
     zh:prompt)      fmt="继续";;
-    zh:hint_chan)   fmt="model-guard：这里没有可用的按键通道（kitty 远程控制 / tmux），被降级时只会停下，需要手动 /model 切换。";;
     ja:stop)        fmt="🚨 model-guard：%s がフラグされ、セッションは %s に格下げされました。停止しました。";;
     ja:tail_switch) fmt="%s へ自動で切り替え中…";;
     ja:tail_manual) fmt="/model で %s に切り替えてから再送してください。";;
-    ja:tail_halted) fmt="%s もフラグ対象のため自動切替しません：/model で選ぶか、もう一度送ると %s のまま続行します。";;
+    ja:tail_halted) fmt="%s もフラグ対象のため自動切替しません。/model で選んでください。";;
     ja:block_wait)  fmt="🚨 model-guard：%s から %s へ自動切替中です。30 秒で切り替わらなければ /model で手動切替。";;
-    ja:block_first) fmt="🚨 model-guard：まだ %s です（%s から格下げ）。/model で切替後に再送、またはもう一度送ると %s のまま続行。";;
     ja:band_switch) fmt="🚨 フラグ：%s → %s · %s へ自動切替中…";;
     ja:band_manual) fmt="🚨 フラグ：%s → %s · 停止 · /model で %s へ";;
-    ja:band_halted) fmt="🚨 フラグで %s に格下げ · 停止 · /model か再送で続行";;
-    ja:band_kept)   fmt="⚠ %s のまま続行（%s から格下げ）";;
+    ja:band_halted) fmt="🚨 フラグで %s に格下げ · 停止 · /model で選択";;
     ja:band_recov)  fmt="🔁 %s がフラグ → %s に切替済み";;
     ja:notify_t)    fmt="model-guard：モデルが格下げ";;
     ja:notify_go)   fmt="%s → %s、停止。%s へ切替して続行します";;
@@ -234,17 +231,14 @@ mg_text() {
     ja:notify_fail) fmt="%s への切替失敗（%s）、停止のまま";;
     ja:notify_stop) fmt="%s → %s、停止；%s";;
     ja:prompt)      fmt="続けて";;
-    ja:hint_chan)   fmt="model-guard：キー送信チャネル（kitty remote control / tmux）がないため、格下げ時は停止のみ。/model で手動切替してください。";;
     ko:stop)        fmt="🚨 model-guard: %s 이(가) 플래그되어 세션이 %s (으)로 강등되었습니다. 중지됨.";;
     ko:tail_switch) fmt="%s (으)로 자동 전환 중…";;
     ko:tail_manual) fmt="/model 로 %s (으)로 바꾼 뒤 다시 보내세요.";;
-    ko:tail_halted) fmt="%s 도 플래그 대상이라 자동 전환하지 않습니다: /model 로 고르거나, 한 번 더 보내면 %s 에서 계속합니다.";;
+    ko:tail_halted) fmt="%s 도 플래그 대상이라 자동 전환하지 않습니다. /model 로 고르세요.";;
     ko:block_wait)  fmt="🚨 model-guard: %s → %s 자동 전환 중입니다. 30초 안에 안 되면 /model 로 수동 전환.";;
-    ko:block_first) fmt="🚨 model-guard: 아직 %s 입니다 (%s 에서 강등). /model 후 다시 보내거나, 한 번 더 보내면 %s 에서 계속.";;
     ko:band_switch) fmt="🚨 플래그: %s → %s · %s (으)로 자동 전환 중…";;
     ko:band_manual) fmt="🚨 플래그: %s → %s · 중지 · /model 로 %s";;
-    ko:band_halted) fmt="🚨 플래그로 %s 강등 · 중지 · /model 또는 재전송";;
-    ko:band_kept)   fmt="⚠ %s 에서 계속 (%s 에서 강등)";;
+    ko:band_halted) fmt="🚨 플래그로 %s 강등 · 중지 · /model 로 선택";;
     ko:band_recov)  fmt="🔁 %s 플래그 → %s 로 전환됨";;
     ko:notify_t)    fmt="model-guard: 모델 강등";;
     ko:notify_go)   fmt="%s → %s, 중지. %s 로 전환 후 계속";;
@@ -252,17 +246,14 @@ mg_text() {
     ko:notify_fail) fmt="%s 전환 실패 (%s), 중지 유지";;
     ko:notify_stop) fmt="%s → %s, 중지; %s";;
     ko:prompt)      fmt="계속";;
-    ko:hint_chan)   fmt="model-guard: 키 입력 채널(kitty remote control / tmux)이 없어 강등 시 중지만 합니다. /model 로 수동 전환하세요.";;
     es:stop)        fmt="🚨 model-guard: %s fue marcado y la sesión bajó a %s. Detenido.";;
     es:tail_switch) fmt="Cambiando automáticamente a %s…";;
     es:tail_manual) fmt="Cambia a %s con /model y reenvía.";;
-    es:tail_halted) fmt="%s también sería marcado; sin cambio automático: elige con /model o reenvía para seguir en %s.";;
+    es:tail_halted) fmt="%s también sería marcado; sin cambio automático: elige con /model.";;
     es:block_wait)  fmt="🚨 model-guard: cambiando de %s a %s; espera. Si no cambia en 30 s, usa /model.";;
-    es:block_first) fmt="🚨 model-guard: sigues en %s (bajado desde %s). Cambia con /model y reenvía, o reenvía para seguir en %s.";;
     es:band_switch) fmt="🚨 marcado: %s → %s · cambiando a %s…";;
     es:band_manual) fmt="🚨 marcado: %s → %s · detenido · /model a %s";;
-    es:band_halted) fmt="🚨 marcado, bajado a %s · detenido · /model o reenviar";;
-    es:band_kept)   fmt="⚠ sigues en %s (bajado desde %s)";;
+    es:band_halted) fmt="🚨 marcado, bajado a %s · detenido · elige con /model";;
     es:band_recov)  fmt="🔁 %s marcado → ahora en %s";;
     es:notify_t)    fmt="model-guard: modelo degradado";;
     es:notify_go)   fmt="%s → %s, detenido. Cambiando a %s y continuando";;
@@ -270,17 +261,14 @@ mg_text() {
     es:notify_fail) fmt="No se pudo cambiar a %s (%s); sigue detenido";;
     es:notify_stop) fmt="%s → %s, detenido; %s";;
     es:prompt)      fmt="Continúa.";;
-    es:hint_chan)   fmt="model-guard: sin canal de teclas (kitty remote control / tmux); una degradación solo detiene, cambia con /model a mano.";;
     fr:stop)        fmt="🚨 model-guard : %s a été signalé, la session est passée à %s. Arrêt.";;
     fr:tail_switch) fmt="Bascule automatique vers %s…";;
     fr:tail_manual) fmt="Passe à %s avec /model puis renvoie.";;
-    fr:tail_halted) fmt="%s serait aussi signalé ; pas de bascule automatique : choisis avec /model ou renvoie pour rester sur %s.";;
+    fr:tail_halted) fmt="%s serait aussi signalé ; pas de bascule automatique : choisis avec /model.";;
     fr:block_wait)  fmt="🚨 model-guard : bascule de %s vers %s en cours ; patiente. Sans succès en 30 s, utilise /model.";;
-    fr:block_first) fmt="🚨 model-guard : toujours sur %s (rétrogradé depuis %s). /model puis renvoie, ou renvoie pour rester sur %s.";;
     fr:band_switch) fmt="🚨 signalé : %s → %s · bascule vers %s…";;
     fr:band_manual) fmt="🚨 signalé : %s → %s · arrêté · /model vers %s";;
-    fr:band_halted) fmt="🚨 signalé, rétrogradé à %s · arrêté · /model ou renvoyer";;
-    fr:band_kept)   fmt="⚠ reste sur %s (rétrogradé depuis %s)";;
+    fr:band_halted) fmt="🚨 signalé, rétrogradé à %s · arrêté · choisis avec /model";;
     fr:band_recov)  fmt="🔁 %s signalé → passé à %s";;
     fr:notify_t)    fmt="model-guard : modèle rétrogradé";;
     fr:notify_go)   fmt="%s → %s, arrêté. Bascule vers %s puis reprise";;
@@ -288,17 +276,14 @@ mg_text() {
     fr:notify_fail) fmt="Bascule vers %s échouée (%s) ; toujours arrêté";;
     fr:notify_stop) fmt="%s → %s, arrêté ; %s";;
     fr:prompt)      fmt="Continue.";;
-    fr:hint_chan)   fmt="model-guard : aucun canal de frappe (kitty remote control / tmux) ; une rétrogradation ne fait qu'arrêter, bascule à la main avec /model.";;
     de:stop)        fmt="🚨 model-guard: %s wurde markiert, die Sitzung ist auf %s herabgestuft. Gestoppt.";;
     de:tail_switch) fmt="Wechsle automatisch zu %s…";;
     de:tail_manual) fmt="Mit /model zu %s wechseln und erneut senden.";;
-    de:tail_halted) fmt="%s würde ebenfalls markiert; kein automatischer Wechsel: mit /model wählen oder erneut senden, um auf %s weiterzumachen.";;
+    de:tail_halted) fmt="%s würde ebenfalls markiert; kein automatischer Wechsel: mit /model wählen.";;
     de:block_wait)  fmt="🚨 model-guard: Wechsel von %s zu %s läuft; bitte warten. Klappt es nicht in 30 s, /model verwenden.";;
-    de:block_first) fmt="🚨 model-guard: immer noch %s (herabgestuft von %s). /model und erneut senden, oder erneut senden, um auf %s zu bleiben.";;
     de:band_switch) fmt="🚨 markiert: %s → %s · Wechsel zu %s…";;
     de:band_manual) fmt="🚨 markiert: %s → %s · gestoppt · /model zu %s";;
-    de:band_halted) fmt="🚨 markiert, herabgestuft auf %s · gestoppt · /model oder erneut senden";;
-    de:band_kept)   fmt="⚠ bleibt auf %s (herabgestuft von %s)";;
+    de:band_halted) fmt="🚨 markiert, herabgestuft auf %s · gestoppt · mit /model wählen";;
     de:band_recov)  fmt="🔁 %s markiert → gewechselt zu %s";;
     de:notify_t)    fmt="model-guard: Modell herabgestuft";;
     de:notify_go)   fmt="%s → %s, gestoppt. Wechsel zu %s, dann weiter";;
@@ -306,17 +291,14 @@ mg_text() {
     de:notify_fail) fmt="Wechsel zu %s fehlgeschlagen (%s); bleibt gestoppt";;
     de:notify_stop) fmt="%s → %s, gestoppt; %s";;
     de:prompt)      fmt="Weiter.";;
-    de:hint_chan)   fmt="model-guard: kein Tastenkanal (kitty remote control / tmux); eine Herabstufung stoppt nur, Wechsel per /model von Hand.";;
     pt:stop)        fmt="🚨 model-guard: %s foi sinalizado e a sessão caiu para %s. Parado.";;
     pt:tail_switch) fmt="Trocando automaticamente para %s…";;
     pt:tail_manual) fmt="Troque para %s com /model e reenvie.";;
-    pt:tail_halted) fmt="%s também seria sinalizado; sem troca automática: escolha com /model ou reenvie para seguir em %s.";;
+    pt:tail_halted) fmt="%s também seria sinalizado; sem troca automática: escolha com /model.";;
     pt:block_wait)  fmt="🚨 model-guard: trocando de %s para %s; aguarde. Se não trocar em 30 s, use /model.";;
-    pt:block_first) fmt="🚨 model-guard: ainda em %s (rebaixado de %s). /model e reenvie, ou reenvie para seguir em %s.";;
     pt:band_switch) fmt="🚨 sinalizado: %s → %s · trocando para %s…";;
     pt:band_manual) fmt="🚨 sinalizado: %s → %s · parado · /model para %s";;
-    pt:band_halted) fmt="🚨 sinalizado, rebaixado para %s · parado · /model ou reenviar";;
-    pt:band_kept)   fmt="⚠ segue em %s (rebaixado de %s)";;
+    pt:band_halted) fmt="🚨 sinalizado, rebaixado para %s · parado · escolha com /model";;
     pt:band_recov)  fmt="🔁 %s sinalizado → agora em %s";;
     pt:notify_t)    fmt="model-guard: modelo rebaixado";;
     pt:notify_go)   fmt="%s → %s, parado. Trocando para %s e continuando";;
@@ -324,17 +306,14 @@ mg_text() {
     pt:notify_fail) fmt="Troca para %s falhou (%s); segue parado";;
     pt:notify_stop) fmt="%s → %s, parado; %s";;
     pt:prompt)      fmt="Continue.";;
-    pt:hint_chan)   fmt="model-guard: sem canal de teclas (kitty remote control / tmux); um rebaixamento só para, troque com /model manualmente.";;
     *:stop)         fmt="🚨 model-guard: %s was flagged and the session was downgraded to %s. Stopped.";;
     *:tail_switch)  fmt="Switching to %s automatically…";;
     *:tail_manual)  fmt="Switch to %s with /model and resend.";;
-    *:tail_halted)  fmt="%s would be flagged too, so no automatic switch: pick one with /model, or resend to keep going on %s.";;
+    *:tail_halted)  fmt="%s would be flagged too, so no automatic switch: pick one with /model.";;
     *:block_wait)   fmt="🚨 model-guard: switching from %s to %s, hold on. If it has not switched within 30 s, use /model.";;
-    *:block_first)  fmt="🚨 model-guard: still on %s (downgraded from %s). Switch with /model and resend, or resend to keep going on %s.";;
     *:band_switch)  fmt="🚨 FLAGGED: %s → %s · switching to %s…";;
     *:band_manual)  fmt="🚨 FLAGGED: %s → %s · stopped · /model to %s";;
-    *:band_halted)  fmt="🚨 FLAGGED, downgraded to %s · stopped · /model or resend";;
-    *:band_kept)    fmt="⚠ staying on %s (downgraded from %s)";;
+    *:band_halted)  fmt="🚨 FLAGGED, downgraded to %s · stopped · pick one with /model";;
     *:band_recov)   fmt="🔁 %s flagged → switched to %s";;
     *:notify_t)     fmt="model-guard: model downgraded";;
     *:notify_go)    fmt="%s → %s, stopped. Switching to %s and continuing";;
@@ -342,7 +321,6 @@ mg_text() {
     *:notify_fail)  fmt="Switch to %s failed (%s); still stopped";;
     *:notify_stop)  fmt="%s → %s, stopped; %s";;
     *:prompt)       fmt="Continue.";;
-    *:hint_chan)    fmt="model-guard: no keystroke channel here (kitty remote control / tmux), so a downgrade only stops; switch by hand with /model.";;
   esac
   # shellcheck disable=SC2059
   printf "$fmt" "$@"

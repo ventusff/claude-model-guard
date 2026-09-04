@@ -47,18 +47,18 @@ Plus the useful everyday bits: current model & effort, context-window usage, and
 
 Showing a downgrade is half the job. The most common silent downgrade today is a **safeguard flag**: Fable's (or Opus 5's) safeguards flag a message, Claude Code re-runs it on Opus 4.8 — and keeps the whole session there. With the 1.1 hooks the session instead
 
-1. **stops** — the next tool call is denied and the turn ends (`PreToolUse`); new prompts are held back (`UserPromptSubmit`) until the model is sorted out;
+1. **stops** — the next tool call is denied and the turn ends (`PreToolUse`);
 2. **switches** — a detached driver presses Esc, types `/model <recovery model>` and `/effort <level>` into the session's own terminal, and waits for Claude Code's `PostModelSwitch` event to confirm the switch (the plugin's `PreModelSwitch` hook answers *allow*, so no cache-miss dialog gets in the way);
 3. **continues** — sends the continue prompt, and the interrupted task resumes on the recovery model.
 
 Default: `claude-opus-5[1m]` at `max` effort, continue prompt `Continue.` (or `继续` when the band language is Chinese). Measured round trip: about 8 seconds from the downgrade to the first token on the recovery model.
 
-Typing into the terminal needs a **keystroke channel**: a tmux pane (`send-keys`), or kitty with remote control over a socket (`allow_remote_control socket-only` + `listen_on unix:@kitty` in `kitty.conf`, then restart kitty — `setup` offers to add both lines). Without a channel the stop still happens, the band names the `/model` to run, and the next prompt you send passes through after one warning.
+Steps 2 and 3 only exist where the terminal can be driven: a tmux pane (`send-keys`), or kitty with remote control over a socket (`allow_remote_control socket-only` + `listen_on unix:@kitty` in `kitty.conf`, then restart kitty — `setup` offers to add both lines). Anywhere else the plugin does step 1 and nothing more: the turn stops once, the band names the `/model` to run, and the hooks stay out of your way.
 
 Two details worth knowing:
 
 - `/model <id>` in an interactive session also saves `<id>` as your default for new sessions. The plugin puts your previous default back after its own switch, so a recovery never changes what tomorrow's sessions start with.
-- If the recovery model itself gets flagged (Opus 5 → Opus 4.8), or a session is downgraded more than `RECOVER_MAX` times, the plugin only stops. The band says so; `/model` to pick a model, or send your prompt again to knowingly stay on the fallback.
+- If the recovery model itself gets flagged (Opus 5 → Opus 4.8), or a session is downgraded more than `RECOVER_MAX` times, the plugin only stops. The band says so; pick a model with `/model`.
 
 ## Install
 
@@ -141,11 +141,10 @@ The hooks keep one small JSON file per session in `$XDG_RUNTIME_DIR/model-guard/
 
 | status | meaning |
 |---|---|
-| `pending` | downgraded, turn stopped; the driver has not started (or no channel exists) |
+| `pending` | downgraded with a keystroke channel; the driver is starting |
 | `switching` | the driver is typing the switch |
 | `recovered` | the session model changed after the downgrade (by the driver or by you) |
-| `halted` | downgraded, but no automatic switch: the recovery model itself was flagged, the switch happened again while recovering, or `RECOVER_MAX` was hit |
-| `released` | you sent a prompt twice while stopped and chose to stay on the fallback |
+| `stopped` | downgraded, no automatic switch (no channel, the recovery model itself was flagged, downgraded again while recovering, or `RECOVER_MAX` hit): the turn is stopped once, then the hooks pass everything |
 
 `SessionStart` forgets stale state (a latched fallback re-announces itself on resume as `PostModelSwitch` source `resume`, which triggers the switch but not the continue prompt); `SessionEnd` cleans up. `tests/run.sh` drives the whole state machine with synthetic payloads and a `dryrun` channel.
 

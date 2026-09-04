@@ -53,7 +53,7 @@ session automatically (Fable/Opus 5 → Opus 4.8):
   `RECOVER_MODEL=claude-opus-5[1m]`, `RECOVER_EFFORT=max`
 - "Stop, switch to another model…" — description: type the model id (and
   optionally an effort level) via Other, e.g. `claude-opus-5 high`
-- "Stop only" — conf: `RECOVER_CHANNEL=none` (the band still tells which /model to run)
+- "Stop only" — conf: `RECOVER_CHANNEL=none` (the turn stops once; the band tells which /model to run)
 - "Off" — conf: `RECOVER=off` (no hooks act; statusline only)
 
 If `settings.json` already has a `statusLine` that is **not** model-guard, add
@@ -92,9 +92,9 @@ override — auto-detection from the settings.json `model` field is the default.
   Tell the user kitty must be restarted for this to take effect (open sessions can be
   resumed with `claude --resume`). `socket-only` keeps the tty channel closed; only
   local processes reaching the socket can control kitty.
-- No channel at all (plain terminal, SSH without tmux): explain that downgrades will
-  stop the turn and the band will name the `/model` to run; suggest tmux, or
-  `RECOVER_CHANNEL=none` to silence the session-start hint.
+- No channel at all (plain terminal, SSH without tmux): say so in one line — a
+  downgrade stops the turn once and the band names the `/model` to run; tmux would
+  enable the automatic switch.
 
 ## 4. Register the statusLine
 
