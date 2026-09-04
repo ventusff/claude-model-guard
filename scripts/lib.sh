@@ -25,7 +25,7 @@
 #              note says why (no_channel, target_flagged, too_many_recoveries,
 #              downgraded_again, target_not_stronger, switch_not_observed)
 
-MG_VERSION="1.1.0"
+MG_VERSION="1.1.1"
 MG_CONF="${MODEL_GUARD_CONF:-$HOME/.claude/model-guard.conf}"
 MG_SETTINGS="${MODEL_GUARD_SETTINGS:-$HOME/.claude/settings.json}"
 MG_STATE_DIR="${MODEL_GUARD_STATE_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/model-guard}"

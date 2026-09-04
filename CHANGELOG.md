@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.1 — 2026-09-04
+
+- Without a keystroke channel (or when an automatic switch is not allowed) a
+  downgrade stops the running turn once and the hooks step aside: no prompt
+  gate, no second-submission release, no session-start hint. A `Stop` hook
+  marks a turn that ended by itself.
+- Driver: transcript match counter fixed; a failed switch leaves the session
+  stopped; tmux channel verified live.
+
 ## 1.1.0 — 2026-09-04
 
 Auto-recovery from safeguard-flag downgrades.
