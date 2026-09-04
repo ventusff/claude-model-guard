@@ -16,15 +16,20 @@
 #   2. ~/.claude/statusline-expected-model            (legacy override file)
 #   3. "model" in ~/.claude/settings.json             ("[1m]"-style suffix stripped;
 #                                                      "default" counts as no expectation)
-# Model strength: fable/mythos(4) > opus(3) > sonnet(2) > haiku(1) > unknown(0).
-# Same rank but a different id still alarms — we can't prove it isn't weaker.
+# Model strength: family fable/mythos > opus > sonnet > haiku, then version
+# (claude-opus-5 > claude-opus-4-8). Unknown ids score 0 and always alarm.
 # Effort strength: xhigh(4) > high(3) > medium(2) > low(1).
 #
 # Colors are truecolor, with a fixed 256-color-cube fallback when COLORTERM says no.
 # Plain ANSI 16-color codes get remapped by terminal themes and the contrast collapses
 # (red turns pink). All three fg/bg pairs are WCAG >= 7:1 (AAA):
 #   OK    #000000 on #3FB950 = 8.3:1    ALARM #FFFFFF on #B00020 = 7.3:1
-#   INFO  #FFFFFF on #0D47A1 = 8.6:1
+#   INFO  #FFFFFF on #0D47A1 = 8.6:1    RECOV #000000 on #FFB300 = 11.4:1
+#
+# Recovery episodes (plugin hooks, see lib.sh) are read from the per-session state
+# file under $XDG_RUNTIME_DIR/model-guard and get their own band:
+#   red    🚨 downgraded by a flag, stopped / switching to the recovery model
+#   amber  🔁 recovered: running on the recovery model after a flag
 #
 # Config (~/.claude/model-guard.conf, KEY=VALUE per line, everything optional):
 #   LANGUAGE=auto|en|zh|ja|ko|es|fr|de|pt   band language; auto follows the "language"
@@ -39,17 +44,20 @@
 # right after the `input=$(cat ...)` line to inspect the full stdin payload
 # (model / effort / thinking / context_window / rate_limits / fast_mode / ...).
 
-MG_VERSION="1.0.0"
+MG_VERSION="1.1.0"
 set -u
 input=$(cat 2>/dev/null || true)
 
-CONF="$HOME/.claude/model-guard.conf"
+CONF="${MODEL_GUARD_CONF:-$HOME/.claude/model-guard.conf}"
+SETTINGS="${MODEL_GUARD_SETTINGS:-$HOME/.claude/settings.json}"
+STATE_DIR="${MODEL_GUARD_STATE_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/model-guard}"
 conf_get() {
   [ -f "$CONF" ] || return 0
   sed -n "s/^[[:space:]]*$1=//p" "$CONF" | tail -n1 | tr -d '" '
 }
 
 if command -v jq >/dev/null 2>&1; then
+  session_id=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)
   model_id=$(printf '%s' "$input" | jq -r '.model.id // "unknown"' 2>/dev/null || echo unknown)
   model_name=$(printf '%s' "$input" | jq -r '.model.display_name // .model.id // "unknown"' 2>/dev/null || echo unknown)
   effort_level=$(printf '%s' "$input" | jq -r '.effort.level // empty' 2>/dev/null || true)
@@ -57,9 +65,12 @@ if command -v jq >/dev/null 2>&1; then
   ctx_pct=$(printf '%s' "$input" | jq -r '.context_window.used_percentage // empty | if type=="number" then floor else empty end' 2>/dev/null || true)
   limit_pct=$(printf '%s' "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty | if type=="number" then floor else empty end' 2>/dev/null || true)
   email=$(jq -r '.oauthAccount.emailAddress // empty' "$HOME/.claude.json" 2>/dev/null || true)
-  settings_lang=$(jq -r '.language // empty' "$HOME/.claude/settings.json" 2>/dev/null || true)
-  expected_effort=$(jq -r '.effortLevel // empty' "$HOME/.claude/settings.json" 2>/dev/null || true)
+  settings_lang=$(jq -r '.language // empty' "$SETTINGS" 2>/dev/null || true)
+  expected_effort=$(jq -r '.effortLevel // empty' "$SETTINGS" 2>/dev/null || true)
+  state=""
+  [ -n "$session_id" ] && state=$(cat "$STATE_DIR/$session_id.json" 2>/dev/null || true)
 else
+  session_id=""; state=""
   model_id=unknown; model_name=unknown; effort_level=""; thinking_off=""
   ctx_pct=""; limit_pct=""; email=""; settings_lang=""; expected_effort=""
 fi
@@ -84,35 +95,59 @@ case "$lang" in
   zh) T_DOWN="🚨🚨🚨 模型被降级!当前: %s (%s) < %s"; T_BACK="立刻 /model 切回!"
       T_UP="⬆ 强于默认:当前 %s · %s(默认 %s)"
       T_EFF="⚡%s < 默认%s!"; T_THINK="🧠思考OFF!"; T_LIMIT="⏳5h额度 %s%%!"
-      T_ACCT="账号未知(API key?)";;
+      T_ACCT="账号未知(API key?)"
+      T_SWITCH="🚨 被 flag:%s → %s · 自动切回 %s 中…"; T_MANUAL="🚨 被 flag:%s → %s · 已停 · /model 切到 %s"
+      T_HALTED="🚨 被 flag 降到 %s · 已停 · /model 自选或再发一次放行"; T_KEPT="⚠ 留在 %s 上继续(从 %s 降级)"
+      T_RECOV="🔁 %s 被 flag → 已切到 %s";;
   ja) T_DOWN="🚨🚨🚨 モデルがダウングレード!現在: %s (%s) < %s"; T_BACK="今すぐ /model で戻して!"
       T_UP="⬆ デフォルトより上位: %s · %s(デフォルト %s)"
       T_EFF="⚡%s < デフォルト%s!"; T_THINK="🧠思考OFF!"; T_LIMIT="⏳5h上限 %s%%!"
-      T_ACCT="アカウント不明(API key?)";;
+      T_ACCT="アカウント不明(API key?)"
+      T_SWITCH="🚨 フラグ:%s → %s · %s へ自動切替中…"; T_MANUAL="🚨 フラグ:%s → %s · 停止 · /model で %s へ"
+      T_HALTED="🚨 フラグで %s に格下げ · 停止 · /model か再送で続行"; T_KEPT="⚠ %s のまま続行(%s から格下げ)"
+      T_RECOV="🔁 %s がフラグ → %s に切替済み";;
   ko) T_DOWN="🚨🚨🚨 모델 다운그레이드! 현재: %s (%s) < %s"; T_BACK="지금 /model 로 되돌리세요!"
       T_UP="⬆ 기본보다 상위: %s · %s (기본 %s)"
       T_EFF="⚡%s < 기본 %s!"; T_THINK="🧠사고 OFF!"; T_LIMIT="⏳5h한도 %s%%!"
-      T_ACCT="계정 알 수 없음 (API key?)";;
+      T_ACCT="계정 알 수 없음 (API key?)"
+      T_SWITCH="🚨 플래그: %s → %s · %s (으)로 자동 전환 중…"; T_MANUAL="🚨 플래그: %s → %s · 중지 · /model 로 %s"
+      T_HALTED="🚨 플래그로 %s 강등 · 중지 · /model 또는 재전송"; T_KEPT="⚠ %s 에서 계속 (%s 에서 강등)"
+      T_RECOV="🔁 %s 플래그 → %s 로 전환됨";;
   es) T_DOWN="🚨🚨🚨 ¡MODELO DEGRADADO! ahora: %s (%s) < %s"; T_BACK="¡/model para volver YA!"
       T_UP="⬆ superior al predeterminado: %s · %s (predet.: %s)"
       T_EFF="¡⚡%s < predet. %s!"; T_THINK="🧠 ¡thinking OFF!"; T_LIMIT="¡⏳ límite 5h %s%%!"
-      T_ACCT="cuenta desconocida (¿API key?)";;
+      T_ACCT="cuenta desconocida (¿API key?)"
+      T_SWITCH="🚨 marcado: %s → %s · cambiando a %s…"; T_MANUAL="🚨 marcado: %s → %s · detenido · /model a %s"
+      T_HALTED="🚨 marcado, bajado a %s · detenido · /model o reenviar"; T_KEPT="⚠ sigues en %s (bajado desde %s)"
+      T_RECOV="🔁 %s marcado → ahora en %s";;
   fr) T_DOWN="🚨🚨🚨 MODÈLE RÉTROGRADÉ ! actuel : %s (%s) < %s"; T_BACK="/model pour revenir !"
       T_UP="⬆ au-dessus du défaut : %s · %s (défaut : %s)"
       T_EFF="⚡%s < défaut %s !"; T_THINK="🧠 thinking OFF !"; T_LIMIT="⏳ limite 5h %s%% !"
-      T_ACCT="compte inconnu (API key ?)";;
+      T_ACCT="compte inconnu (API key ?)"
+      T_SWITCH="🚨 signalé : %s → %s · bascule vers %s…"; T_MANUAL="🚨 signalé : %s → %s · arrêté · /model vers %s"
+      T_HALTED="🚨 signalé, rétrogradé à %s · arrêté · /model ou renvoyer"; T_KEPT="⚠ reste sur %s (rétrogradé depuis %s)"
+      T_RECOV="🔁 %s signalé → passé à %s";;
   de) T_DOWN="🚨🚨🚨 MODELL HERABGESTUFT! jetzt: %s (%s) < %s"; T_BACK="sofort /model zurückwechseln!"
       T_UP="⬆ über Standard: %s · %s (Standard: %s)"
       T_EFF="⚡%s < Standard %s!"; T_THINK="🧠 Thinking AUS!"; T_LIMIT="⏳ 5h-Limit %s%%!"
-      T_ACCT="Konto unbekannt (API key?)";;
+      T_ACCT="Konto unbekannt (API key?)"
+      T_SWITCH="🚨 markiert: %s → %s · Wechsel zu %s…"; T_MANUAL="🚨 markiert: %s → %s · gestoppt · /model zu %s"
+      T_HALTED="🚨 markiert, herabgestuft auf %s · gestoppt · /model oder erneut senden"; T_KEPT="⚠ bleibt auf %s (herabgestuft von %s)"
+      T_RECOV="🔁 %s markiert → gewechselt zu %s";;
   pt) T_DOWN="🚨🚨🚨 MODELO REBAIXADO! agora: %s (%s) < %s"; T_BACK="rode /model para voltar JÁ!"
       T_UP="⬆ acima do padrão: %s · %s (padrão: %s)"
       T_EFF="⚡%s < padrão %s!"; T_THINK="🧠 thinking OFF!"; T_LIMIT="⏳ limite 5h %s%%!"
-      T_ACCT="conta desconhecida (API key?)";;
+      T_ACCT="conta desconhecida (API key?)"
+      T_SWITCH="🚨 sinalizado: %s → %s · trocando para %s…"; T_MANUAL="🚨 sinalizado: %s → %s · parado · /model para %s"
+      T_HALTED="🚨 sinalizado, rebaixado para %s · parado · /model ou reenviar"; T_KEPT="⚠ segue em %s (rebaixado de %s)"
+      T_RECOV="🔁 %s sinalizado → agora em %s";;
   *)  T_DOWN="🚨🚨🚨 MODEL DOWNGRADED! now: %s (%s) < %s"; T_BACK="run /model to switch back NOW!"
       T_UP="⬆ above default: %s · %s (default: %s)"
       T_EFF="⚡%s < default %s!"; T_THINK="🧠 thinking OFF!"; T_LIMIT="⏳ 5h limit %s%%!"
-      T_ACCT="account unknown (API key?)";;
+      T_ACCT="account unknown (API key?)"
+      T_SWITCH="🚨 FLAGGED: %s → %s · switching to %s…"; T_MANUAL="🚨 FLAGGED: %s → %s · stopped · /model to %s"
+      T_HALTED="🚨 FLAGGED, downgraded to %s · stopped · /model or resend"; T_KEPT="⚠ staying on %s (downgraded from %s)"
+      T_RECOV="🔁 %s flagged → switched to %s";;
 esac
 
 # ---- expected model ----
@@ -121,21 +156,42 @@ if [ -z "$expected" ] && [ -f "$HOME/.claude/statusline-expected-model" ]; then
   expected=$(head -n1 "$HOME/.claude/statusline-expected-model" | tr -d '[:space:]')
 fi
 if [ -z "$expected" ]; then
-  cfg=$(jq -r '.model // empty' "$HOME/.claude/settings.json" 2>/dev/null || true)
+  cfg=$(jq -r '.model // empty' "$SETTINGS" 2>/dev/null || true)
   cfg=${cfg%%\[*}
   case "$cfg" in ""|default) ;; *) expected="$cfg";; esac
 fi
 
-rank_of() {
-  local s="${1,,}"
-  case "$s" in
-    *fable*|*mythos*) echo 4;;
-    *opus*)           echo 3;;
-    *sonnet*)         echo 2;;
-    *haiku*)          echo 1;;
-    *)                echo 0;;
+strip_1m() { printf '%s' "$1" | sed 's/\[1[mM]\]//g'; }
+# family rank * 1000 + major * 100 + minor; unknown family = 0
+score_of() {
+  local id fam=0 rest major=0 minor=0
+  id=$(strip_1m "$1" | tr '[:upper:]' '[:lower:]')
+  case "$id" in
+    *fable*|*mythos*) fam=4;;
+    *opus*)           fam=3;;
+    *sonnet*)         fam=2;;
+    *haiku*)          fam=1;;
+    *)                printf '0'; return;;
   esac
+  rest=$(printf '%s' "$id" | sed -E 's/^.*(fable|mythos|opus|sonnet|haiku)-?//')
+  if [[ "$rest" =~ ^([0-9]+)(-([0-9]{1,2}))? ]]; then
+    major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[3]:-0}
+  fi
+  printf '%d' $((fam * 1000 + major * 100 + minor))
 }
+# "claude-opus-4-8" -> "Opus 4.8", "claude-opus-5[1m]" -> "Opus 5 (1M)"
+pretty() {
+  local base fam ver one_m=""
+  case "$1" in *\[1[mM]\]*) one_m=" (1M)";; esac
+  base=$(strip_1m "$1" | tr '[:upper:]' '[:lower:]')
+  if [[ "$base" =~ (fable|mythos|opus|sonnet|haiku)-?([0-9]+(-[0-9]{1,2})?) ]]; then
+    fam=${BASH_REMATCH[1]}; ver=${BASH_REMATCH[2]//-/.}
+    printf '%s %s%s' "${fam^}" "$ver" "$one_m"
+  else
+    printf '%s' "$1"
+  fi
+}
+same_model() { [ "$(strip_1m "$1" | tr '[:upper:]' '[:lower:]')" = "$(strip_1m "$2" | tr '[:upper:]' '[:lower:]')" ]; }
 eff_rank() {
   case "${1,,}" in
     xhigh) echo 4;; high) echo 3;; medium) echo 2;; low) echo 1;; *) echo 0;;
@@ -148,29 +204,53 @@ case "${COLORTERM:-}" in
     OK=$'\033[1;38;2;0;0;0;48;2;63;185;80m'         # black on #3FB950
     ALARM=$'\033[1;38;2;255;255;255;48;2;176;0;32m' # white on #B00020
     INFO=$'\033[1;38;2;255;255;255;48;2;13;71;161m' # white on #0D47A1
+    RECOV=$'\033[1;38;2;0;0;0;48;2;255;179;0m'      # black on #FFB300
     ;;
   *)  # fixed 256-color-cube approximations (also theme-proof):
       # 16=#000 231=#fff 77=#5fd75f 124=#af0000 25=#005faf
     OK=$'\033[1;38;5;16;48;5;77m'
     ALARM=$'\033[1;38;5;231;48;5;124m'
     INFO=$'\033[1;38;5;231;48;5;25m'
+    RECOV=$'\033[1;38;5;16;48;5;214m'
     ;;
 esac
 
 # ---- pick the band + main text ----
-is_alarm=""
-if [ -z "$expected" ]; then
-  band=$INFO; head_txt="● ${model_name} · ${model_id}"
-elif printf '%s' "$model_id" | grep -qiE -- "$expected"; then
-  band=$OK; head_txt="✔ ${model_name} · ${model_id}"
-else
-  ar=$(rank_of "$model_id"); er=$(rank_of "$expected")
-  if [ "$ar" -gt 0 ] && [ "$er" -gt 0 ] && [ "$ar" -gt "$er" ]; then
-    band=$INFO
-    printf -v head_txt "$T_UP" "$model_name" "$model_id" "${expected^^}"
+# A recovery episode (plugin hooks) overrides the plain model comparison.
+is_alarm=""; band=""; head_txt=""
+if [ -n "$state" ]; then
+  st_status=$(printf '%s' "$state" | jq -r '.status // empty' 2>/dev/null || true)
+  st_from=$(pretty "$(printf '%s' "$state" | jq -r '.from_model // empty')")
+  st_to=$(pretty "$(printf '%s' "$state" | jq -r '.to_model // empty')")
+  st_target=$(pretty "$(printf '%s' "$state" | jq -r '.target_model // empty')")
+  st_channel=$(printf '%s' "$state" | jq -r '.channel // "none"')
+  st_recovered_to=$(printf '%s' "$state" | jq -r '.recovered_to // empty')
+  case "$st_status" in
+    switching) band=$ALARM; is_alarm=1; printf -v head_txt "$T_SWITCH" "$st_from" "$st_to" "$st_target";;
+    pending)   band=$ALARM; is_alarm=1
+               if [ "$st_channel" != none ]; then printf -v head_txt "$T_SWITCH" "$st_from" "$st_to" "$st_target"
+               else printf -v head_txt "$T_MANUAL" "$st_from" "$st_to" "$st_target"; fi;;
+    halted)    band=$ALARM; is_alarm=1; printf -v head_txt "$T_HALTED" "$st_to";;
+    released)  band=$ALARM; is_alarm=1; printf -v head_txt "$T_KEPT" "$st_to" "$st_from";;
+    recovered) if same_model "$model_id" "$st_recovered_to"; then
+                 band=$RECOV; printf -v head_txt "$T_RECOV" "$st_from" "$(pretty "$st_recovered_to")"
+               fi;;
+  esac
+fi
+if [ -z "$band" ]; then
+  if [ -z "$expected" ]; then
+    band=$INFO; head_txt="● ${model_name} · ${model_id}"
+  elif printf '%s' "$model_id" | grep -qiE -- "$expected"; then
+    band=$OK; head_txt="✔ ${model_name} · ${model_id}"
   else
-    band=$ALARM; is_alarm=1
-    printf -v head_txt "$T_DOWN" "$model_name" "$model_id" "${expected^^}"
+    as=$(score_of "$model_id"); es=$(score_of "$expected")
+    if [ "$as" -gt 0 ] && [ "$es" -gt 0 ] && [ "$as" -gt "$es" ]; then
+      band=$INFO
+      printf -v head_txt "$T_UP" "$model_name" "$model_id" "${expected^^}"
+    else
+      band=$ALARM; is_alarm=1
+      printf -v head_txt "$T_DOWN" "$model_name" "$model_id" "${expected^^}"
+    fi
   fi
 fi
 
@@ -212,8 +292,10 @@ fi
 
 # Over-wide padding: anything past the terminal width gets clipped by the TUI,
 # so the band spans the full row at any terminal size.
-if [ -n "$is_alarm" ]; then
+if [ -n "$is_alarm" ] && [ -z "$state" ]; then
   tail_pad=" ┃ ${T_BACK}$(printf '🚨 %.0s' $(seq 1 80))"
+elif [ -n "$is_alarm" ]; then
+  tail_pad="$(printf ' 🚨%.0s' $(seq 1 80))"
 else
   tail_pad=$(printf '%300s' '')
 fi

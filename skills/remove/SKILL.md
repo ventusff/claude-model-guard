@@ -36,6 +36,10 @@ a) Unregister — restore the pre-model-guard statusline if one was saved:
 - Validate the result parses: `jq . ~/.claude/settings.json >/dev/null`.
 
 b) If deleting files: `rm -f ~/.claude/model-guard.sh ~/.claude/model-guard.conf`
+   and the per-session recovery state: `rm -rf "${XDG_RUNTIME_DIR:-/tmp}/model-guard"`.
+   If `~/.config/kitty/kitty.conf` carries the two remote-control lines that
+   `setup` added (`allow_remote_control socket-only`, `listen_on unix:@kitty`),
+   mention them — they are harmless, the user decides whether to keep them.
 
 ## 4. Report (short)
 

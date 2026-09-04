@@ -1,12 +1,13 @@
 ---
 name: setup
-description: Interactive setup for the model-guard statusline — asks two quick preference questions, copies the script, and registers the statusLine in ~/.claude/settings.json (with a timestamped backup). Safe to re-run anytime to change options or to refresh after a plugin update.
+description: Interactive setup for model-guard — asks three quick preference questions (band language, account display, auto-recovery), copies the statusline script, registers the statusLine in ~/.claude/settings.json (with a timestamped backup) and checks the keystroke channel the recovery hooks need. Safe to re-run anytime to change options or to refresh after a plugin update.
 argument-hint: "(no arguments)"
 ---
 
 # model-guard: interactive setup
 
-You are installing (or reconfiguring) the model-guard statusline for this user.
+You are installing (or reconfiguring) model-guard for this user: the statusline
+script and the auto-recovery hooks' configuration.
 
 Plugin root: `${CLAUDE_PLUGIN_ROOT}`
 (If the path above looks like an unexpanded shell variable instead of a real
@@ -28,6 +29,10 @@ Follow the steps in order. Keep your final report short.
   `model` field (used for auto-detecting the expected model — no question needed).
 - Read `~/.claude/model-guard.conf` if it exists (this run is then a reconfigure —
   mention the current values inside the question descriptions below).
+- Keystroke channel for auto-recovery, from this session's environment:
+  `TMUX` + `TMUX_PANE` set → tmux; `KITTY_WINDOW_ID` set and `KITTY_LISTEN_ON` set → kitty;
+  `KITTY_WINDOW_ID` set but `KITTY_LISTEN_ON` empty → kitty without remote control
+  (fixable, see step 3b); otherwise none.
 
 ## 2. Ask preferences (ONE AskUserQuestion call)
 
@@ -42,8 +47,17 @@ Question 2 — header "Account", show the logged-in account email on the band
 - "Show (Recommended)"
 - "Hide"
 
+Question 3 — header "Recovery", what to do when a safeguard flag downgrades the
+session automatically (Fable/Opus 5 → Opus 4.8):
+- "Stop, switch to Opus 5 (1M) at max effort, continue (Recommended)" — conf:
+  `RECOVER_MODEL=claude-opus-5[1m]`, `RECOVER_EFFORT=max`
+- "Stop, switch to another model…" — description: type the model id (and
+  optionally an effort level) via Other, e.g. `claude-opus-5 high`
+- "Stop only" — conf: `RECOVER_CHANNEL=none` (the band still tells which /model to run)
+- "Off" — conf: `RECOVER=off` (no hooks act; statusline only)
+
 If `settings.json` already has a `statusLine` that is **not** model-guard, add
-Question 3 — header "Existing bar": "Replace (keep restorable backup)" /
+Question 4 — header "Existing bar": "Replace (keep restorable backup)" /
 "Cancel setup". If the user cancels, stop cleanly.
 
 ## 3. Install files
@@ -54,12 +68,33 @@ Question 3 — header "Existing bar": "Replace (keep restorable backup)" /
   `SHOW_CONTEXT`, `LIMIT_WARN_AT`):
 
 ```
-LANGUAGE=auto        # or en / zh / ja / ko / es / fr / de / pt
-SHOW_ACCOUNT=true    # or false
+LANGUAGE=auto                    # or en / zh / ja / ko / es / fr / de / pt
+SHOW_ACCOUNT=true                # or false
+RECOVER_MODEL=claude-opus-5[1m]  # from Question 3; omit the RECOVER_* keys entirely for the defaults
+RECOVER_EFFORT=max
 ```
 
 Do NOT write `EXPECTED_MODEL` unless the user explicitly asked for a manual
 override — auto-detection from the settings.json `model` field is the default.
+
+### 3b. Keystroke channel (only when recovery is on)
+
+- tmux or kitty with `KITTY_LISTEN_ON`: nothing to do, say which channel was found.
+- kitty without remote control: ask (ONE AskUserQuestion, header "kitty") whether to
+  append these two lines to `~/.config/kitty/kitty.conf` (backup first:
+  `cp ~/.config/kitty/kitty.conf ~/.config/kitty/kitty.conf.bak-model-guard-$(date +%Y%m%d-%H%M%S)`):
+
+  ```
+  allow_remote_control socket-only
+  listen_on unix:@kitty
+  ```
+
+  Tell the user kitty must be restarted for this to take effect (open sessions can be
+  resumed with `claude --resume`). `socket-only` keeps the tty channel closed; only
+  local processes reaching the socket can control kitty.
+- No channel at all (plain terminal, SSH without tmux): explain that downgrades will
+  stop the turn and the band will name the `/model` to run; suggest tmux, or
+  `RECOVER_CHANNEL=none` to silence the session-start hint.
 
 ## 4. Register the statusLine
 
@@ -88,12 +123,19 @@ Run both and let the raw ANSI output render in the terminal (band colors include
 If the drill does not come out as an alarm (e.g. the user's `model` is `default`,
 so there is no expectation), explain that and point at `EXPECTED_MODEL` in the conf.
 
+3. Only if the user asks for proof of the hooks: `bash "${CLAUDE_PLUGIN_ROOT}/tests/run.sh"`
+   (about 20 s, isolated temp state, no keystrokes are sent).
+
 ## 6. Report (short)
 
 - The statusline hot-reloads: the band should appear at the bottom within seconds
   (worst case: next session).
+- The recovery hooks are plugin hooks: they load when a session starts, so sessions
+  that were already open before the install/update do not have them until restarted.
 - Re-run `/model-guard:setup` anytime to change options or after a plugin update.
 - `/model-guard:remove` uninstalls cleanly and restores any previous statusline.
 - Advanced knobs live in `~/.claude/model-guard.conf`: `LANGUAGE`, `SHOW_ACCOUNT`,
   `SHOW_CONTEXT`, `LIMIT_WARN_AT` (5h rate-limit warning threshold, default 80,
-  `off` to disable), `EXPECTED_MODEL` (grep -Ei pattern override).
+  `off` to disable), `EXPECTED_MODEL` (grep -Ei pattern override), and for recovery
+  `RECOVER`, `RECOVER_MODEL`, `RECOVER_EFFORT`, `RECOVER_PROMPT`, `RECOVER_CHANNEL`,
+  `RECOVER_MAX`, `DEBUG` (see README).

@@ -9,7 +9,7 @@
     {
       "name": "model-guard",
       "source": "./",
-      "description": "🚨 Statusline that catches silent model downgrades in Claude Code — theme-proof full-width alarm for model, reasoning effort, thinking state and rate-limit pressure."
+      "description": "🚨 Statusline that catches silent model downgrades in Claude Code — and hooks that undo a safeguard-flag downgrade: stop, switch to your recovery model, continue."
     }
   ]
 }

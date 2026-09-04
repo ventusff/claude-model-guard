@@ -1,8 +1,8 @@
 {
   "name": "model-guard",
   "displayName": "Model Guard",
-  "version": "1.0.0",
-  "description": "🚨 Statusline that catches silent model downgrades in Claude Code — theme-proof full-width alarm for model, reasoning effort, thinking state and rate-limit pressure. 8 languages, interactive 30-second setup.",
+  "version": "1.1.0",
+  "description": "🚨 Statusline that catches silent model downgrades in Claude Code — and hooks that undo a safeguard-flag downgrade: stop the turn, switch the session to your recovery model, continue the task. 8 languages, interactive 30-second setup.",
   "author": {
     "name": "ventusff",
     "url": "https://github.com/ventusff"
@@ -16,6 +16,8 @@
     "downgrade",
     "alarm",
     "rate-limit",
-    "monitor"
+    "monitor",
+    "hooks",
+    "recovery"
   ]
 }

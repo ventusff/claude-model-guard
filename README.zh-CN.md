@@ -4,7 +4,7 @@
 
 # 🚨 model-guard
 
-**抓住 Claude Code 静默降级的状态栏——在它烧掉你的 session 之前。**
+**抓住 Claude Code 静默降级的状态栏——1.1 起，被安全过滤器 flag 导致的那次降级还会被自动撤销。**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Made for Claude Code](https://img.shields.io/badge/made%20for-Claude%20Code-d97757)](https://claude.com/claude-code)
@@ -32,6 +32,7 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 | 🟩 `✔` | 模型与本机预期一致 |
 | 🟦 `⬆` | 比默认**更强**——仅提示，不报警 |
 | 🟥 `🚨` | **静默降级**——整条变红，提醒你 `/model` 切回 |
+| 🟧 `🔁` | **已恢复**——被 flag 降级后，插件已把 session 切到恢复模型 |
 | 🟦 `●` | 未配置预期——中性展示 |
 
 模型型号只是一半。红色**内嵌警示补丁**负责其余的静默降级：
@@ -41,6 +42,23 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 - ⏳ **5 小时限额窗口 ≥ 80%**——强制回退的前兆，在降级发生*之前*就预警
 
 外加日常实用信息：当前模型与思考强度、上下文用量、当前登录账号（多账号切换党懂的）。
+
+## 自动恢复
+
+看见降级只是一半。眼下最常见的静默降级是**安全过滤器 flag**：Fable（或 Opus 5）的过滤器判定某条消息可疑，Claude Code 就把它改用 Opus 4.8 重跑一遍——然后整个 session 都留在 Opus 4.8 上。装上 1.1 的钩子后，session 会改成：
+
+1. **停**——下一次工具调用被拒、这一轮直接结束（`PreToolUse`）；模型没换回来之前，新发的提示词会被拦住（`UserPromptSubmit`）；
+2. **切**——一个独立的恢复进程往 session 自己的终端里按 Esc、输入 `/model <恢复模型>` 和 `/effort <强度>`，并等 Claude Code 的 `PostModelSwitch` 事件确认切换成功（插件的 `PreModelSwitch` 钩子回答 *allow*，所以不会被「缓存失效，确认切换？」的对话框卡住）；
+3. **续**——发出继续提示词，被打断的任务在恢复模型上接着做。
+
+默认恢复到 `claude-opus-5[1m]`、强度 `max`，继续提示词是「继续」（横幅语言为中文时；其他语言是 `Continue.`）。实测从降级到恢复模型吐出第一个字，整个往返约 8 秒。
+
+往终端里打字需要一条**按键通道**：tmux 面板（`send-keys`），或开启了 socket 远程控制的 kitty（`kitty.conf` 里加 `allow_remote_control socket-only` 和 `listen_on unix:@kitty`，重启 kitty；`setup` 会主动提出帮你加）。没有通道时「停」照样生效，横幅会写明该 `/model` 切到哪，你再发一次提示词就放行。
+
+两个值得知道的细节：
+
+- 交互式 session 里 `/model <id>` 会顺手把 `<id>` 存成你新 session 的默认模型。插件在自己切完之后会把原来的默认值改回去，所以一次恢复不会改变你明天开新 session 用什么模型。
+- 如果恢复模型自己也被 flag（Opus 5 → Opus 4.8），或者同一个 session 被降级超过 `RECOVER_MAX` 次，插件就只停不切。横幅会说明；用 `/model` 自己选，或者把提示词再发一次，明确表示就留在回退模型上继续。
 
 ## 安装
 
@@ -56,7 +74,7 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 
 > **为什么还要 setup 这一步？** Claude Code 插件目前无法自行注册主状态栏（插件的 `settings.json` 只支持 `agent` 和 `subagentStatusLine` 两个键）。`setup` 是唯一逃不掉的一步——而且有 session 启动提示兜底：没跑 setup 会提醒你，插件更新带来新脚本也会提醒你刷新。
 
-**依赖：** bash 4+ 和 [`jq`](https://jqlang.github.io/jq/)。就这些——一个脚本，没有守护进程，不联网。
+**依赖：** bash 4+ 和 [`jq`](https://jqlang.github.io/jq/)；恢复钩子另外用到 `flock`、`setsid`（util-linux），有 `notify-send` 时会发一条桌面通知。没有守护进程，不联网。插件钩子在 session 启动时加载——装好或更新后请重开 session。
 
 ## 「降级」是怎么判定的
 
@@ -66,11 +84,12 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 2. `~/.claude/statusline-expected-model`（旧版覆盖文件）
 3. `~/.claude/settings.json` 里钉住的 `model`（`opus[1m]` → `opus`；`default` 视为无预期）
 
-**强度序：** `fable/mythos > opus > sonnet > haiku`。
+**强度序：** 先看家族 `fable/mythos > opus > sonnet > haiku`，同家族再比版本号（`claude-opus-5 > claude-opus-4-8`）。
 
 - 实际模型**低于**预期 → 🟥 整行报警。
-- **同档但型号不同** → 依然 🟥。无法证明它不更弱，就不猜——保守是设计原则。
+- 认不出的型号计 0 分 → 🟥。无法证明它不更弱，就不猜——保守是设计原则。
 - 实际**高于**预期 → 🟦 冷静的蓝色。白捡的升级不算急事。
+- 自动降级（Claude Code 的 `PostModelSwitch` 事件，来源为 `auto` 或 `resume`）用同一套强度序判断要不要启动恢复。
 
 ## 配置
 
@@ -83,6 +102,13 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 | `SHOW_CONTEXT` | `true` | 显示上下文用量，如 `◔ 13%` |
 | `LIMIT_WARN_AT` | `80` | 5 小时限额用量达到 N% 时红色补丁预警。`off` 关闭 |
 | `EXPECTED_MODEL` | *(自动)* | 手动指定预期模型 pattern，如 `opus\|fable` |
+| `RECOVER` | `on` | 恢复钩子总开关（`off` 则停与切都不做） |
+| `RECOVER_MODEL` | `claude-opus-5[1m]` | 自动降级后要切到的模型 |
+| `RECOVER_EFFORT` | `max` | 切过去之后执行的 `/effort` 强度（`off` 不动） |
+| `RECOVER_PROMPT` | *(按语言)* | 用来接着做被打断任务的提示词 |
+| `RECOVER_CHANNEL` | `auto` | 按键怎么送进 session：`auto`（先 tmux 面板，再 kitty）、`tmux`、`kitty`、`dryrun`（只记日志）、`none` |
+| `RECOVER_MAX` | `3` | 每个 session 允许的自动恢复次数，超过就只停不切 |
+| `DEBUG` | *(关)* | `true` 时把每次钩子输入追加到 `$XDG_RUNTIME_DIR/model-guard/debug.log` |
 
 随时重跑 `/model-guard:setup` 交互式改配置。
 
@@ -100,8 +126,28 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 | OK | `#000000` on `#3FB950` | 8.3 : 1 |
 | ALARM | `#FFFFFF` on `#B00020` | 7.3 : 1 |
 | INFO | `#FFFFFF` on `#0D47A1` | 8.6 : 1 |
+| RECOVERED | `#000000` on `#FFB300` | 11.4 : 1 |
 
 不用闪烁（SGR 5）——跨终端渲染不可控。
+
+</details>
+
+<details>
+<summary><b>自动恢复是怎么做的？为什么要往终端里打字？</b></summary>
+
+Claude Code 的钩子能看见模型切换（`PostModelSwitch` 带 `from_model`、`to_model` 和 `source`，自动回退时 `source` 是 `auto`），也能否决用户发起的切换（`PreModelSwitch`），但没有任何钩子能*设置* session 的模型；一个正在运行的交互式 session，除了键盘也没有别的控制入口。所以插件做的就是你手动会做的那几步——Esc、`/model`、`/effort`、「继续」——通过终端自己的远程控制接口送进去，而且从不靠猜：每一步都等到回执（Claude Code 的会话登记表变成空闲、`PostModelSwitch` 事件、命令在会话记录里的回显）才走下一步。
+
+钩子在 `$XDG_RUNTIME_DIR/model-guard/` 里为每个 session 记一个小 JSON：
+
+| 状态 | 含义 |
+|---|---|
+| `pending` | 已降级、已停；恢复进程尚未开始（或没有按键通道） |
+| `switching` | 恢复进程正在输入切换命令 |
+| `recovered` | 降级之后模型换过了（恢复进程换的，或你自己换的） |
+| `halted` | 已降级但不自动切：恢复模型自己也被 flag、恢复途中又被降级、或达到 `RECOVER_MAX` |
+| `released` | 停下之后你把提示词发了两次，选择留在回退模型上 |
+
+`SessionStart` 会清掉过期状态（被锁定的回退模型在恢复会话时会以 `source=resume` 的 `PostModelSwitch` 重新出现，这会触发切换但不会发继续提示词）；`SessionEnd` 负责收尾。`tests/run.sh` 用合成的钩子输入和 `dryrun` 通道把整台状态机跑一遍。
 
 </details>
 
@@ -128,7 +174,7 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 /model-guard:remove
 ```
 
-注销状态栏（还原你之前的配置）、可选删除脚本和配置文件、保留 settings 备份。之后可在 `/plugin` 里移除插件本体。
+注销状态栏（还原你之前的配置）、可选删除脚本、配置文件和每个 session 的状态文件、保留 settings 备份。之后可在 `/plugin` 里移除插件本体——恢复钩子随插件本体一起走。
 
 ## License
 
