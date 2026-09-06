@@ -1,0 +1,40 @@
+# AGENTS.md — claude-model-guard
+
+A Claude Code plugin (`model-guard`, distributed from this repo as marketplace `claude-model-guard`): a full-width statusline band that flags a silent model downgrade, plus hooks that undo a safeguard-flag downgrade — stop the turn, type `/model` and `/effort` into the session's own terminal (tmux, zellij or kitty), resume the task. Pure bash + jq, no build step, no daemon. Installed via `/plugin marketplace add ventusff/claude-model-guard`, so `main` on GitHub is what every install fetches.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `.claude-plugin/plugin.json` | Plugin manifest: name, version, description, keywords. |
+| `.claude-plugin/marketplace.json` | The marketplace this repo is; lists the one plugin with `source: ./`. |
+| `hooks/hooks.json` | Registers `scripts/guard-hook.sh` on SessionStart, SessionEnd, PreModelSwitch, PostModelSwitch, PreToolUse, Stop, UserPromptSubmit; `check-install.sh` on SessionStart. |
+| `scripts/statusline.sh` | The statusline. `setup` copies it to `~/.claude/model-guard.sh`; that copy is what Claude Code runs. |
+| `scripts/lib.sh` | Shared helpers (`mg_*`): config, language, model strength ranking, per-session state, keystroke channels. Sourced by the hook and the driver. |
+| `scripts/guard-hook.sh` | The one hook command; dispatches on `hook_event_name`, answers with hook JSON. |
+| `scripts/recover.sh` | The detached driver that types Esc, `/model`, `/effort`, continue prompt into the terminal. |
+| `scripts/check-install.sh` | SessionStart: hints until setup is done; refreshes the installed statusline copy when the plugin ships a newer `MG_VERSION`. |
+| `skills/setup/SKILL.md`, `skills/remove/SKILL.md` | `/model-guard:setup` and `/model-guard:remove` — step lists the agent follows, not shell scripts. |
+| `tests/run.sh` | The test suite: synthetic hook payloads, `dryrun` channel, fake tmux/zellij binaries, isolated state and config. |
+| `README.md`, `README.zh-CN.md`, `CHANGELOG.md` | User docs in both languages, and the release log. |
+| `assets/` | The README's hero and setup SVGs. |
+
+## Run and verify
+
+```sh
+tests/run.sh      # the whole suite (state machine, driver, channel detection, bands); must end "0 failed"
+```
+
+Requirements: bash 4+ and jq; the recovery path also uses `flock` and `setsid`. There is no CI workflow — `tests/run.sh` on the machine is the bar. Hooks load at session start, so a change under `hooks/` or `scripts/` is only observed by a freshly started session, and the statusline change only after the installed copy is refreshed.
+
+## Hard rules
+
+- **The version lives in four places and must match**: `.claude-plugin/plugin.json`, `MG_VERSION` in `scripts/statusline.sh`, `MG_VERSION` in `scripts/lib.sh`, the top entry of `CHANGELOG.md`. `check-install.sh` decides whether to refresh a user's installed statusline by comparing `MG_VERSION` — a release that bumps plugin.json but not `MG_VERSION` leaves every user on the old script, silently.
+- **The installed statusline is a copy** (`~/.claude/model-guard.sh`). Editing `scripts/statusline.sh` changes nothing in a running session until the copy is refreshed (session-start hook or `setup`).
+- **Config, settings and state are resolved through the `MODEL_GUARD_*` overrides** (`MODEL_GUARD_CONF`, `MODEL_GUARD_SETTINGS`, `MODEL_GUARD_STATE_DIR`, `MODEL_GUARD_SESSIONS_DIR`) in `lib.sh` and `statusline.sh`; the tests point them at a temp dir. A new read of `~/.claude/...` that bypasses them makes the suite touch the real machine.
+- **Hooks are silent unless they act.** Session start, upgrades, and switches from the named user-driven sources (`command`, `picker`, `sdk`, `config`, `fast_mode`, `slash_command`) produce no output and no state; every other switch source to a weaker model starts a recovery episode. The suite asserts both directions.
+- **Keystrokes address one pane by id, never the focused window** — tmux `$TMUX_PANE`, zellij `terminal_<ZELLIJ_PANE_ID>`, kitty `$KITTY_WINDOW_ID`. A missing or non-numeric pane id means "no channel", not a guess.
+- **A recovery never changes tomorrow's default.** `/model <id>` also writes `model` into `settings.json`; the driver restores the previous default afterwards, and the suite checks it.
+- **Colours are truecolor with a 256-colour fallback, every pair >= 7:1 contrast, no blink.** No plain ANSI 16-colour codes — themes remap them and the alarm stops being an alarm.
+- **`README.md` and `README.zh-CN.md` say the same thing** — change both. User-visible behaviour changes get a `CHANGELOG.md` entry.
+- Comments and commit messages are English. A release is one commit titled `model-guard <version> — <what changed>`.
