@@ -9,9 +9,10 @@
 #   RECOVER_EFFORT=<level|off>  effort applied on the recovery model (default max)
 #   RECOVER_PROMPT=<text>       prompt sent to resume the interrupted task
 #                               (default: "继续" for zh, "Continue." otherwise)
-#   RECOVER_CHANNEL=auto|tmux|kitty|dryrun|none
+#   RECOVER_CHANNEL=auto|tmux|zellij|kitty|dryrun|none
 #                               how keystrokes reach the session (default auto:
-#                               tmux pane first, then kitty remote control)
+#                               tmux pane, then zellij pane, then kitty remote
+#                               control)
 #   RECOVER_MAX=<n>             automatic recoveries per session (default 3)
 #   DEBUG=true                  append every hook input to <state dir>/debug.log
 #
@@ -25,7 +26,7 @@
 #              note says why (no_channel, target_flagged, too_many_recoveries,
 #              downgraded_again, target_not_stronger, switch_not_observed)
 
-MG_VERSION="1.1.1"
+MG_VERSION="1.2.0"
 MG_CONF="${MODEL_GUARD_CONF:-$HOME/.claude/model-guard.conf}"
 MG_SETTINGS="${MODEL_GUARD_SETTINGS:-$HOME/.claude/settings.json}"
 MG_STATE_DIR="${MODEL_GUARD_STATE_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/model-guard}"
@@ -174,6 +175,19 @@ mg_kitten() {
   printf '%s' "$(dirname "$k")/kitten"
 }
 
+# The zellij pane this process runs in, as an "action --pane-id" target.
+# Fails when the id is absent or not numeric: without a proven target the
+# channel must stay unavailable rather than type into someone else's pane.
+mg_zellij_pane() {
+  case "${ZELLIJ_PANE_ID:-}" in
+    ""|*[!0-9]*) return 1;;
+    *)           printf 'terminal_%s' "$ZELLIJ_PANE_ID";;
+  esac
+}
+
+# The keystroke channel for the session this hook runs in. Inner multiplexers
+# win over the outer terminal: they address one pane by id, while kitty remote
+# control reaches a window whose focused pane may be a different session.
 mg_channel() {
   local want
   want=$(mg_conf_or RECOVER_CHANNEL auto)
@@ -184,6 +198,12 @@ mg_channel() {
   if [ "$want" = auto ] || [ "$want" = tmux ]; then
     if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
       printf 'tmux'; return
+    fi
+  fi
+  if [ "$want" = auto ] || [ "$want" = zellij ]; then
+    if [ -n "${ZELLIJ_SESSION_NAME:-}" ] && mg_zellij_pane >/dev/null 2>&1 && \
+       command -v zellij >/dev/null 2>&1; then
+      printf 'zellij'; return
     fi
   fi
   if [ "$want" = auto ] || [ "$want" = kitty ]; then

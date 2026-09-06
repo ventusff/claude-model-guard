@@ -5,8 +5,9 @@
 #   /model <RECOVER_MODEL>      switch the session model
 #   /effort <RECOVER_EFFORT>    raise reasoning effort on the recovery model
 #   <RECOVER_PROMPT>            resume the interrupted task
-# Keystroke channels: tmux (send-keys into $TMUX_PANE), kitty (remote control
-# over $KITTY_LISTEN_ON into window $KITTY_WINDOW_ID), dryrun (log only).
+# Keystroke channels: tmux (send-keys into $TMUX_PANE), zellij (action write
+# into pane terminal_$ZELLIJ_PANE_ID of $ZELLIJ_SESSION_NAME), kitty (remote
+# control over $KITTY_LISTEN_ON into window $KITTY_WINDOW_ID), dryrun (log only).
 # The continue prompt is only sent after the PostModelSwitch hook has marked the
 # session recovered, i.e. after Claude Code itself confirmed the switch.
 # Log: <state dir>/<session id>.log
@@ -37,19 +38,34 @@ dfrom=$(mg_display_name "$from"); dto=$(mg_display_name "$to"); dtarget=$(mg_dis
 if [ "$status" != pending ] || [ -z "$target" ]; then
   say "nothing to do: status=$status target=$target"; exit 0
 fi
-kit=""
+kit=""; zpane=""
 case "$channel" in
   kitty) kit=$(mg_kitten) || { say "kitten not found"; exit 1; };;
   tmux)  command -v tmux >/dev/null 2>&1 || { say "tmux not found"; exit 1; };;
+  zellij)
+    command -v zellij >/dev/null 2>&1 || { say "zellij not found"; exit 1; }
+    zpane=$(mg_zellij_pane) || { say "no zellij pane id"; exit 1; }
+    [ -n "${ZELLIJ_SESSION_NAME:-}" ] || { say "no zellij session name"; exit 1; };;
   dryrun) ;;
   *) say "no keystroke channel ($channel)"; exit 1;;
 esac
 say "recovery start: $from -> $to, target=$target effort=$effort channel=$channel continue=$cont"
 
-# send_key <tmux key name> <kitty key name>
+# Interrupting a turn puts the interrupted prompt back into the input box, so
+# a line typed next would be appended to it and submitted as one prompt. Every
+# typed line therefore starts by emptying the box.
+clear_input() {
+  local i
+  for i in 1 2 3; do send_key C-u ctrl+u 21; sleep 0.05; done
+  send_key C-a ctrl+a 1; sleep 0.05
+  send_key C-k ctrl+k 11; sleep 0.1
+}
+
+# send_key <tmux key name> <kitty key name> <byte zellij writes>
 send_key() {
   case "$channel" in
     tmux)   tmux send-keys -t "$TMUX_PANE" "$1";;
+    zellij) zellij --session "$ZELLIJ_SESSION_NAME" action write --pane-id "$zpane" "$3";;
     kitty)  "$kit" @ --to "$KITTY_LISTEN_ON" send-key --match "id:$KITTY_WINDOW_ID" "$2";;
     dryrun) say "KEY $2";;
   esac
@@ -58,11 +74,12 @@ send_text() {
   local text="${1//\\/\\\\}"
   case "$channel" in
     tmux)   tmux send-keys -t "$TMUX_PANE" -l "$1";;
+    zellij) zellij --session "$ZELLIJ_SESSION_NAME" action write-chars --pane-id "$zpane" -- "$1";;
     kitty)  "$kit" @ --to "$KITTY_LISTEN_ON" send-text --match "id:$KITTY_WINDOW_ID" "$text";;
     dryrun) say "TEXT $1";;
   esac
 }
-send_line() { send_text "$1"; sleep 0.15; send_key Enter enter; }
+send_line() { clear_input; send_text "$1"; sleep 0.15; send_key Enter enter 13; }
 
 # The session transcript is the acknowledgement channel: every local command
 # and every submitted prompt lands there, so each keystroke group is retried
@@ -88,7 +105,7 @@ type_line() {
   send_line "$text"
   wait_marker "$marker" "$secs" "$before" && { sleep 1; return 0; }
   say "no transcript echo for '$text' within ${secs}s; resending Enter"
-  send_key Enter enter
+  send_key Enter enter 13
   wait_marker "$marker" 3 "$before" && { sleep 1; return 0; }
   say "still no echo; retyping"
   wait_idle 5
@@ -123,13 +140,9 @@ wait_state() {
 busy_before=$(mg_session_status "$sid" 2>/dev/null || printf unknown)
 sleep 0.2
 mg_state_update "$sid" '.status="switching" | .switching_at=$at' --arg at "$(date -Is)"
-send_key Escape escape
+send_key Escape escape 27
 say "sent Esc (session was $busy_before)"
-if [ "$busy_before" = busy ]; then
-  before=$(tcount '[Request interrupted by user')
-  wait_marker '[Request interrupted by user' 6 "$before" || say "no interruption echo; continuing"
-fi
-wait_idle 8
+wait_idle 10
 sleep 0.5
 model_before=$(tcount '<command-name>/model</command-name>')
 mg_state_update "$sid" '.typed_switch=true'

@@ -6,7 +6,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 export MODEL_GUARD_STATE_DIR="$tmp/state" MODEL_GUARD_CONF="$tmp/model-guard.conf" \
        MODEL_GUARD_SETTINGS="$tmp/settings.json" MODEL_GUARD_SESSIONS_DIR="$tmp/sessions"
-unset KITTY_LISTEN_ON KITTY_WINDOW_ID TMUX TMUX_PANE
+unset KITTY_LISTEN_ON KITTY_WINDOW_ID TMUX TMUX_PANE ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID
 mkdir -p "$tmp/sessions"
 printf 'LANGUAGE=en\nRECOVER_CHANNEL=dryrun\nRECOVER_MODEL=claude-opus-5[1m]\nRECOVER_EFFORT=max\nRECOVER_MAX=2\n' > "$MODEL_GUARD_CONF"
 printf '{"model":"claude-fable-5-1[1m]","effortLevel":"xhigh"}\n' > "$MODEL_GUARD_SETTINGS"
@@ -138,6 +138,55 @@ check "RECOVER=off disables everything" '[ ! -e "$(mg_state_file $s)" ]'
 printf 'LANGUAGE=en\n' > "$MODEL_GUARD_CONF"
 out=$(hook "{hook_event_name:\"SessionStart\",session_id:\"$s\",source:\"startup\"}")
 check "session start is silent without a channel too" '[ -z "$out" ]'
+
+echo "== keystroke channel detection"
+mkdir -p "$tmp/bin"
+printf '#!/bin/sh\nexit 0\n' > "$tmp/bin/tmux"; chmod +x "$tmp/bin/tmux"
+printf '#!/bin/sh\nexit 0\n' > "$tmp/bin/zellij"; chmod +x "$tmp/bin/zellij"
+zj(){ PATH="$tmp/bin:$PATH" ZELLIJ_SESSION_NAME=cc ZELLIJ_PANE_ID="${1-2}" mg_channel; }
+printf 'LANGUAGE=en\n' > "$MODEL_GUARD_CONF"
+check "no multiplexer at all: none" '[ "$(mg_channel)" = none ]'
+check "pane target is terminal_<id>" '[ "$(ZELLIJ_PANE_ID=3 mg_zellij_pane)" = terminal_3 ]'
+check "a non-numeric pane id is refused" '! ZELLIJ_PANE_ID=plugin_2 mg_zellij_pane >/dev/null 2>&1'
+check "zellij session plus pane id: zellij" '[ "$(zj 2)" = zellij ]'
+check "zellij without a pane id: none" '[ "$(zj "")" = none ]'
+check "tmux wins over zellij" '[ "$(PATH="$tmp/bin:$PATH" TMUX=/s TMUX_PANE=%1 ZELLIJ_SESSION_NAME=cc ZELLIJ_PANE_ID=2 mg_channel)" = tmux ]'
+printf 'RECOVER_CHANNEL=none\n' > "$MODEL_GUARD_CONF"
+check "RECOVER_CHANNEL=none overrides a live zellij" '[ "$(zj 2)" = none ]'
+printf 'RECOVER_CHANNEL=kitty\n' > "$MODEL_GUARD_CONF"
+check "RECOVER_CHANNEL=kitty ignores zellij" '[ "$(zj 2)" = none ]'
+
+echo "== zellij channel: the keystrokes the driver actually sends"
+s=s9
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$ZJ_LOG"\nexit 0\n' > "$tmp/bin/zellij"; chmod +x "$tmp/bin/zellij"
+export ZJ_LOG="$tmp/zellij.log"; : > "$ZJ_LOG"
+printf 'LANGUAGE=en\nRECOVER_MODEL=claude-opus-5[1m]\nRECOVER_EFFORT=max\n' > "$MODEL_GUARD_CONF"
+printf '{"model":"claude-fable-5-1[1m]","effortLevel":"xhigh"}\n' > "$MODEL_GUARD_SETTINGS"
+PATH="$tmp/bin:$PATH" ZELLIJ_SESSION_NAME=cc ZELLIJ_PANE_ID=2 \
+  switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 auto >/dev/null
+check "episode records the zellij channel" '[ "$(mg_state_get $s channel)" = zellij ]'
+for i in $(seq 1 150); do grep -qF -- "write --pane-id terminal_2 13" "$ZJ_LOG" 2>/dev/null && break; sleep 0.1; done
+check "Esc goes to this pane as byte 27" 'grep -qxF -- "--session cc action write --pane-id terminal_2 27" "$ZJ_LOG"'
+check "/model is typed into this pane" 'grep -qxF -- "--session cc action write-chars --pane-id terminal_2 -- /model claude-opus-5[1m]" "$ZJ_LOG"'
+check "Enter goes to this pane as byte 13" 'grep -qxF -- "--session cc action write --pane-id terminal_2 13" "$ZJ_LOG"'
+check "no keystroke addresses another pane" '! grep -v "terminal_2" "$ZJ_LOG" | grep -q pane-id'
+mg_state_update $s '.status="stopped" | .note="test_teardown"'
+unset ZJ_LOG
+printf '#!/bin/sh\nexit 0\n' > "$tmp/bin/zellij"; chmod +x "$tmp/bin/zellij"
+
+echo "== an unrecognised switch source counts as automatic"
+s=s10
+printf 'LANGUAGE=en\nRECOVER_CHANNEL=none\n' > "$MODEL_GUARD_CONF"
+switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 auto_recovery >/dev/null
+check "source auto_recovery starts an episode" '[ "$(status $s)" = stopped ] && [ "$(mg_state_get $s note)" = no_channel ]'
+check "and it continues the task like source auto" '[ "$(mg_state_get $s continue)" = true ]'
+mg_state_clear $s
+switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 session_resume >/dev/null
+check "source session_resume is treated as a resume" '[ "$(mg_state_get $s continue)" = false ]'
+mg_state_clear $s
+switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 slash_command >/dev/null
+check "a user-driven switch never starts an episode" '[ ! -e "$(mg_state_file $s)" ]'
+printf 'LANGUAGE=en\nRECOVER_CHANNEL=dryrun\nRECOVER_MODEL=claude-opus-5[1m]\nRECOVER_EFFORT=max\n' > "$MODEL_GUARD_CONF"
 
 echo "== statusline bands"
 sl="$root/scripts/statusline.sh"

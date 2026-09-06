@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.2.0 — 2026-09-06
+
+- **zellij is a recovery channel.** `auto` now tries a tmux pane, then the zellij
+  pane named by `ZELLIJ_PANE_ID`, then kitty remote control. A non-numeric or
+  absent pane id leaves the channel unavailable rather than guessing a target.
+- **The input box is cleared before every typed line.** Interrupting a turn puts
+  the interrupted prompt back into the box, so the model command used to be
+  appended to it and submitted as one unusable prompt, and the switch never
+  happened.
+- **A turn's interruption is acknowledged by the session registry leaving `busy`**,
+  not by an interruption record in the transcript, which this Claude Code version
+  does not always write.
+- **A switch the user did not ask for always starts a recovery.** Only the
+  named user-driven sources (`command`, `picker`, `sdk`, `config`, `fast_mode`,
+  `slash_command`) pass through, so a source name added later cannot let a
+  downgrade slip by.
+- **A plugin update no longer needs `/model-guard:setup`.** The session-start
+  hook refreshes the installed statusline script in place and reports the new
+  version; config and settings are untouched.
+
 ## 1.1.1 — 2026-09-04
 
 - Without a keystroke channel (or when an automatic switch is not allowed) a

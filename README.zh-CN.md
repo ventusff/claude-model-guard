@@ -53,7 +53,9 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 
 默认恢复到 `claude-opus-5[1m]`、强度 `max`，继续提示词是「继续」（横幅语言为中文时；其他语言是 `Continue.`）。实测从降级到恢复模型吐出第一个字，整个往返约 8 秒。
 
-第 2、3 步只在终端能被驱动时才存在：tmux 面板（`send-keys`），或开启了 socket 远程控制的 kitty（`kitty.conf` 里加 `allow_remote_control socket-only` 和 `listen_on unix:@kitty`，重启 kitty；`setup` 会主动提出帮你加）。其他任何环境下插件只做第 1 步：这一轮停一次，横幅写明该 `/model` 切到哪，钩子不再插手。
+第 2、3 步只在终端能被驱动时才存在：tmux 面板（`send-keys`）、zellij 面板（`action write-chars`），或开启了 socket 远程控制的 kitty（`kitty.conf` 里加 `allow_remote_control socket-only` 和 `listen_on unix:@kitty`，重启 kitty；`setup` 会主动提出帮你加）。tmux 和 zellij 不用配置任何东西。其他任何环境下插件只做第 1 步：这一轮停一次，横幅写明该 `/model` 切到哪，钩子不再插手。
+
+在 tmux 或 zellij 里，按键是按面板编号送到指定的那一个面板，而不是「当前窗口」，所以一个面板在恢复时不会打字到旁边那个 session 里去。
 
 两个值得知道的细节：
 
@@ -72,7 +74,7 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 
 <div align="center"><img src="assets/setup.svg" alt="交互式安装" width="880"></div>
 
-> **为什么还要 setup 这一步？** Claude Code 插件目前无法自行注册主状态栏（插件的 `settings.json` 只支持 `agent` 和 `subagentStatusLine` 两个键）。`setup` 是唯一逃不掉的一步——而且有 session 启动提示兜底：没跑 setup 会提醒你，插件更新带来新脚本也会提醒你刷新。
+> **为什么还要 setup 这一步？** Claude Code 插件目前无法自行注册主状态栏（插件的 `settings.json` 只支持 `agent` 和 `subagentStatusLine` 两个键）。`setup` 是唯一逃不掉的一步，而且只需跑这一次：以后插件更新带来新脚本时，session 启动钩子会自己把装好的那份换成新的，并在屏幕上说一句。
 
 **依赖：** bash 4+ 和 [`jq`](https://jqlang.github.io/jq/)；恢复钩子另外用到 `flock`、`setsid`（util-linux），有 `notify-send` 时会发一条桌面通知。没有守护进程，不联网。插件钩子在 session 启动时加载——装好或更新后请重开 session。
 
@@ -106,7 +108,7 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 | `RECOVER_MODEL` | `claude-opus-5[1m]` | 自动降级后要切到的模型 |
 | `RECOVER_EFFORT` | `max` | 切过去之后执行的 `/effort` 强度（`off` 不动） |
 | `RECOVER_PROMPT` | *(按语言)* | 用来接着做被打断任务的提示词 |
-| `RECOVER_CHANNEL` | `auto` | 按键怎么送进 session：`auto`（先 tmux 面板，再 kitty）、`tmux`、`kitty`、`dryrun`（只记日志）、`none` |
+| `RECOVER_CHANNEL` | `auto` | 按键怎么送进 session：`auto`（先 tmux 面板，再 zellij 面板，再 kitty）、`tmux`、`zellij`、`kitty`、`dryrun`（只记日志）、`none` |
 | `RECOVER_MAX` | `3` | 每个 session 允许的自动恢复次数，超过就只停不切 |
 | `DEBUG` | *(关)* | `true` 时把每次钩子输入追加到 `$XDG_RUNTIME_DIR/model-guard/debug.log` |
 

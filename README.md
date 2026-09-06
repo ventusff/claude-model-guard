@@ -53,7 +53,9 @@ Showing a downgrade is half the job. The most common silent downgrade today is a
 
 Default: `claude-opus-5[1m]` at `max` effort, continue prompt `Continue.` (or `继续` when the band language is Chinese). Measured round trip: about 8 seconds from the downgrade to the first token on the recovery model.
 
-Steps 2 and 3 only exist where the terminal can be driven: a tmux pane (`send-keys`), or kitty with remote control over a socket (`allow_remote_control socket-only` + `listen_on unix:@kitty` in `kitty.conf`, then restart kitty — `setup` offers to add both lines). Anywhere else the plugin does step 1 and nothing more: the turn stops once, the band names the `/model` to run, and the hooks stay out of your way.
+Steps 2 and 3 only exist where the terminal can be driven: a tmux pane (`send-keys`), a zellij pane (`action write-chars`), or kitty with remote control over a socket (`allow_remote_control socket-only` + `listen_on unix:@kitty` in `kitty.conf`, then restart kitty — `setup` offers to add both lines). tmux and zellij need no configuration at all. Anywhere else the plugin does step 1 and nothing more: the turn stops once, the band names the `/model` to run, and the hooks stay out of your way.
+
+Inside a multiplexer the keystrokes address one pane by id, never "the focused window", so a recovery in one pane cannot type into the session next door.
 
 Two details worth knowing:
 
@@ -72,7 +74,7 @@ The last step is **interactive** — arrow keys, two questions, done. It copies 
 
 <div align="center"><img src="assets/setup.svg" alt="interactive setup" width="880"></div>
 
-> **Why is there a setup step at all?** Claude Code plugins can't register a main statusline by themselves (plugin `settings.json` only supports `agent` and `subagentStatusLine`). `setup` is the one honest extra step — and a session-start hint reminds you if it's still pending, or when a plugin update ships a newer script.
+> **Why is there a setup step at all?** Claude Code plugins can't register a main statusline by themselves (plugin `settings.json` only supports `agent` and `subagentStatusLine`). `setup` is the one honest extra step, and it is a one-time one: when a later plugin update ships a newer script, the session-start hook refreshes the installed copy itself and says so.
 
 **Requirements:** bash 4+ and [`jq`](https://jqlang.github.io/jq/); the recovery hooks also use `flock` and `setsid` (util-linux) and, when present, `notify-send` for a desktop notice. No daemon, nothing phones home. Plugin hooks load at session start — restart your sessions after installing or updating.
 
@@ -106,7 +108,7 @@ Everything lives in `~/.claude/model-guard.conf` (created by `setup`, safe to ed
 | `RECOVER_MODEL` | `claude-opus-5[1m]` | Model the session is switched to after an automatic downgrade |
 | `RECOVER_EFFORT` | `max` | `/effort` level applied on the recovery model (`off` to leave it alone) |
 | `RECOVER_PROMPT` | *(by language)* | Prompt sent to resume the interrupted task |
-| `RECOVER_CHANNEL` | `auto` | How keystrokes reach the session: `auto` (tmux pane, then kitty), `tmux`, `kitty`, `dryrun` (log only), `none` |
+| `RECOVER_CHANNEL` | `auto` | How keystrokes reach the session: `auto` (tmux pane, then zellij pane, then kitty), `tmux`, `zellij`, `kitty`, `dryrun` (log only), `none` |
 | `RECOVER_MAX` | `3` | Automatic recoveries allowed per session; beyond that the plugin only stops |
 | `DEBUG` | *(off)* | `true` appends every hook input to `$XDG_RUNTIME_DIR/model-guard/debug.log` |
 

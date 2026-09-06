@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# model-guard SessionStart nudge — the closest a plugin can get to "install and go".
+# model-guard SessionStart hook — the closest a plugin can get to "install and go".
 # Claude Code plugins cannot register a main statusLine themselves, so until
-# /model-guard:setup has been run this prints a one-line hint at session start,
-# and after a plugin update it prints a refresh hint when the installed script
-# is older than the one shipped with the plugin. Silent otherwise.
+# /model-guard:setup has been run this prints a one-line hint at session start.
+# Once it is registered, the statusLine points at a copy of the plugin's script:
+# when a plugin update ships a newer one, this refreshes that copy in place and
+# says so, so an update needs no second command. Silent otherwise.
 # Silence forever:  echo 'SETUP_HINT=off' >> ~/.claude/model-guard.conf
 set -u
 command -v jq >/dev/null 2>&1 || exit 0
@@ -22,7 +23,13 @@ elif [ -f "$inst" ] && [ -f "$src" ]; then
   v_inst=$(sed -n 's/^MG_VERSION="\(.*\)"$/\1/p' "$inst" | head -n1)
   v_src=$(sed -n 's/^MG_VERSION="\(.*\)"$/\1/p' "$src" | head -n1)
   if [ -n "$v_src" ] && [ "$v_inst" != "$v_src" ]; then
-    msg="model-guard: plugin updated (installed ${v_inst:-?} → ${v_src}) — run /model-guard:setup to refresh the statusline script."
+    if cp "$src" "$inst.mg-new" 2>/dev/null && chmod +x "$inst.mg-new" 2>/dev/null \
+       && mv "$inst.mg-new" "$inst" 2>/dev/null; then
+      msg="model-guard: statusline refreshed to ${v_src} (was ${v_inst:-unknown}). Settings and config untouched."
+    else
+      rm -f "$inst.mg-new" 2>/dev/null
+      msg="model-guard: plugin updated (installed ${v_inst:-?} → ${v_src}) but the statusline script could not be refreshed — run /model-guard:setup."
+    fi
   fi
 fi
 

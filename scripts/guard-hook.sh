@@ -3,7 +3,7 @@
 # plugin registers. Reads the hook JSON on stdin, updates the per-session
 # recovery state (lib.sh) and answers with hook JSON on stdout.
 #
-#   PostModelSwitch  source auto|resume and to_model weaker than from_model:
+#   PostModelSwitch  a switch the user did not ask for, to a weaker model:
 #                    the session was downgraded behind the user's back. With a
 #                    keystroke channel: record "pending" and start the detached
 #                    recovery driver. Without one (or when an automatic switch
@@ -137,16 +137,30 @@ end_episode() {
   return 0
 }
 
+# Claude Code names the switches a person asks for. Everything else -- a
+# safeguard-flag fallback, a model restored on resume, any source name added
+# later -- counts as automatic, so an unrecognised source starts a recovery
+# instead of passing the downgrade through.
+mg_switch_kind() {
+  case "$1" in
+    *resume*)                                                     printf resume;;
+    command|picker|sdk|config|fast_mode|slash_command|user_request|client_request)
+                                                                  printf user;;
+    *)                                                            printf auto;;
+  esac
+}
+
 on_model_switch() {
-  local from to source
+  local from to source kind
   from=$(jq -r '.from_model // empty' <<<"$input")
   to=$(jq -r '.to_model // empty' <<<"$input")
   source=$(jq -r '.source // "auto"' <<<"$input")
-  case "$source" in
-    auto|resume)
-      if mg_is_downgrade "$from" "$to"; then begin_episode "$from" "$to" "$source"; else end_episode "$to" "$source"; fi;;
-    *) end_episode "$to" "$source";;
-  esac
+  kind=$(mg_switch_kind "$source")
+  if [ "$kind" != user ] && mg_is_downgrade "$from" "$to"; then
+    begin_episode "$from" "$to" "$kind"
+  else
+    end_episode "$to" "$source"
+  fi
 }
 
 on_pre_model_switch() {

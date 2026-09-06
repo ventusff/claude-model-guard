@@ -29,10 +29,11 @@ Follow the steps in order. Keep your final report short.
   `model` field (used for auto-detecting the expected model — no question needed).
 - Read `~/.claude/model-guard.conf` if it exists (this run is then a reconfigure —
   mention the current values inside the question descriptions below).
-- Keystroke channel for auto-recovery, from this session's environment:
-  `TMUX` + `TMUX_PANE` set → tmux; `KITTY_WINDOW_ID` set and `KITTY_LISTEN_ON` set → kitty;
-  `KITTY_WINDOW_ID` set but `KITTY_LISTEN_ON` empty → kitty without remote control
-  (fixable, see step 3b); otherwise none.
+- Keystroke channel for auto-recovery, from this session's environment, first hit wins:
+  `TMUX` + `TMUX_PANE` set → tmux; `ZELLIJ_SESSION_NAME` + a numeric `ZELLIJ_PANE_ID` set
+  → zellij; `KITTY_WINDOW_ID` set and `KITTY_LISTEN_ON` set → kitty; `KITTY_WINDOW_ID` set
+  but `KITTY_LISTEN_ON` empty → kitty without remote control (fixable, see step 3b);
+  otherwise none.
 
 ## 2. Ask preferences (ONE AskUserQuestion call)
 
@@ -79,7 +80,7 @@ override — auto-detection from the settings.json `model` field is the default.
 
 ### 3b. Keystroke channel (only when recovery is on)
 
-- tmux or kitty with `KITTY_LISTEN_ON`: nothing to do, say which channel was found.
+- tmux, zellij, or kitty with `KITTY_LISTEN_ON`: nothing to do, say which channel was found.
 - kitty without remote control: ask (ONE AskUserQuestion, header "kitty") whether to
   append these two lines to `~/.config/kitty/kitty.conf` (backup first:
   `cp ~/.config/kitty/kitty.conf ~/.config/kitty/kitty.conf.bak-model-guard-$(date +%Y%m%d-%H%M%S)`):
@@ -92,9 +93,9 @@ override — auto-detection from the settings.json `model` field is the default.
   Tell the user kitty must be restarted for this to take effect (open sessions can be
   resumed with `claude --resume`). `socket-only` keeps the tty channel closed; only
   local processes reaching the socket can control kitty.
-- No channel at all (plain terminal, SSH without tmux): say so in one line — a
-  downgrade stops the turn once and the band names the `/model` to run; tmux would
-  enable the automatic switch.
+- No channel at all (a plain terminal, or SSH without a multiplexer): say so in one
+  line — a downgrade stops the turn once and the band names the `/model` to run;
+  running the session inside tmux or zellij enables the automatic switch.
 
 ## 4. Register the statusLine
 
@@ -132,7 +133,12 @@ so there is no expectation), explain that and point at `EXPECTED_MODEL` in the c
   (worst case: next session).
 - The recovery hooks are plugin hooks: they load when a session starts, so sessions
   that were already open before the install/update do not have them until restarted.
-- Re-run `/model-guard:setup` anytime to change options or after a plugin update.
+- Keep the marketplace on auto-update (`/plugin` → Manage marketplaces → Enable
+  auto-update, or `"autoUpdate": true` on the `extraKnownMarketplaces` entry) so
+  later fixes arrive without a manual update.
+- Re-run `/model-guard:setup` anytime to change options. After a plugin update there
+  is nothing to re-run: the session-start hook refreshes the installed statusline
+  script itself.
 - `/model-guard:remove` uninstalls cleanly and restores any previous statusline.
 - Advanced knobs live in `~/.claude/model-guard.conf`: `LANGUAGE`, `SHOW_ACCOUNT`,
   `SHOW_CONTEXT`, `LIMIT_WARN_AT` (5h rate-limit warning threshold, default 80,
