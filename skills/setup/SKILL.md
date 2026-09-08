@@ -66,7 +66,7 @@ Question 4 — header "Existing bar": "Replace (keep restorable backup)" /
 - Copy `${CLAUDE_PLUGIN_ROOT}/scripts/statusline.sh` → `~/.claude/model-guard.sh`, `chmod +x` it.
 - Write `~/.claude/model-guard.conf` with the two answers, **preserving** any
   unrelated existing keys (`SETUP_HINT`, `PREV_STATUSLINE_B64`, `EXPECTED_MODEL`,
-  `SHOW_CONTEXT`, `LIMIT_WARN_AT`):
+  `SHOW_CONTEXT`, `SHOW_LIMIT`, `LIMIT_WARN_AT`):
 
 ```
 LANGUAGE=auto                    # or en / zh / ja / ko / es / fr / de / pt
@@ -141,7 +141,8 @@ so there is no expectation), explain that and point at `EXPECTED_MODEL` in the c
   script itself.
 - `/model-guard:remove` uninstalls cleanly and restores any previous statusline.
 - Advanced knobs live in `~/.claude/model-guard.conf`: `LANGUAGE`, `SHOW_ACCOUNT`,
-  `SHOW_CONTEXT`, `LIMIT_WARN_AT` (5h rate-limit warning threshold, default 80,
+  `SHOW_CONTEXT`, `SHOW_LIMIT` (the account's 5h/7d usage in the band, default true),
+  `LIMIT_WARN_AT` (5h rate-limit warning threshold, default 80,
   `off` to disable), `EXPECTED_MODEL` (grep -Ei pattern override), and for recovery
   `RECOVER`, `RECOVER_MODEL`, `RECOVER_EFFORT`, `RECOVER_PROMPT`, `RECOVER_CHANNEL`,
   `RECOVER_MAX`, `DEBUG` (see README).

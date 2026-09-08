@@ -10,6 +10,8 @@
 # Red inline patches for the other silent downgrades: reasoning effort lowered below
 # settings.json "effortLevel", extended thinking switched off, and a heads-up when the
 # 5-hour rate-limit window fills up (which is exactly when forced fallbacks happen).
+# The usage numbers are the logged-in account's own, asked from Claude Code's usage
+# endpoint (see "usage of the logged-in account" below), not the session's last header.
 #
 # Expected-model resolution (first hit wins):
 #   1. EXPECTED_MODEL in ~/.claude/model-guard.conf   (grep -Ei pattern, manual override)
@@ -37,6 +39,8 @@
 #   EXPECTED_MODEL=<grep -Ei pattern>       override expected-model auto-detection
 #   SHOW_ACCOUNT=true|false                 show logged-in account email (default true)
 #   SHOW_CONTEXT=true|false                 show context-window usage % (default true)
+#   SHOW_LIMIT=true|false                   show the account's 5-hour and 7-day usage,
+#                                           e.g. "⏳ 5h 37% · 7d 18%" (default true)
 #   LIMIT_WARN_AT=<0-100|off>               red patch when 5h rate-limit usage >= N
 #                                           (default 80; "off" disables)
 #
@@ -44,13 +48,17 @@
 # right after the `input=$(cat ...)` line to inspect the full stdin payload
 # (model / effort / thinking / context_window / rate_limits / fast_mode / ...).
 
-MG_VERSION="1.2.0"
+MG_VERSION="1.3.0"
 set -u
 input=$(cat 2>/dev/null || true)
 
 CONF="${MODEL_GUARD_CONF:-$HOME/.claude/model-guard.conf}"
 SETTINGS="${MODEL_GUARD_SETTINGS:-$HOME/.claude/settings.json}"
 STATE_DIR="${MODEL_GUARD_STATE_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/model-guard}"
+# Claude Code keeps .claude.json next to its config dir's parent and the credentials
+# inside the config dir; both move with CLAUDE_CONFIG_DIR.
+CLAUDE_JSON="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+CREDENTIALS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
 conf_get() {
   [ -f "$CONF" ] || return 0
   sed -n "s/^[[:space:]]*$1=//p" "$CONF" | tail -n1 | tr -d '" '
@@ -63,8 +71,9 @@ if command -v jq >/dev/null 2>&1; then
   effort_level=$(printf '%s' "$input" | jq -r '.effort.level // empty' 2>/dev/null || true)
   thinking_off=$(printf '%s' "$input" | jq -r 'if .thinking.enabled == false then "1" else "" end' 2>/dev/null || true)
   ctx_pct=$(printf '%s' "$input" | jq -r '.context_window.used_percentage // empty | if type=="number" then floor else empty end' 2>/dev/null || true)
-  limit_pct=$(printf '%s' "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty | if type=="number" then floor else empty end' 2>/dev/null || true)
-  email=$(jq -r '.oauthAccount.emailAddress // empty' "$HOME/.claude.json" 2>/dev/null || true)
+  seen_5h=$(printf '%s' "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty | if type=="number" then floor else empty end' 2>/dev/null || true)
+  seen_7d=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty | if type=="number" then floor else empty end' 2>/dev/null || true)
+  email=$(jq -r '.oauthAccount.emailAddress // empty' "$CLAUDE_JSON" 2>/dev/null || true)
   settings_lang=$(jq -r '.language // empty' "$SETTINGS" 2>/dev/null || true)
   expected_effort=$(jq -r '.effortLevel // empty' "$SETTINGS" 2>/dev/null || true)
   state=""
@@ -72,7 +81,106 @@ if command -v jq >/dev/null 2>&1; then
 else
   session_id=""; state=""
   model_id=unknown; model_name=unknown; effort_level=""; thinking_off=""
-  ctx_pct=""; limit_pct=""; email=""; settings_lang=""; expected_effort=""
+  ctx_pct=""; seen_5h=""; seen_7d=""; email=""; settings_lang=""; expected_effort=""
+fi
+
+# ---- usage of the logged-in account ----
+# Asked from Claude Code's own usage endpoint (the one behind /usage) with the login
+# token Claude Code will use for its next request, so the number always belongs to the
+# account that request bills. The payload's rate_limits is not that: it is what this
+# one process last read from a response header, so it stands still until this session
+# gets another response, and it survives /login — after an account switch it keeps
+# reporting the previous account.
+# One cache per machine, shared by every session and keyed by the token (a truncated
+# hash, never the token itself): a new login is a new key, so the next refresh asks
+# again at once, and until the answer is in the segment stays empty rather than showing
+# another account's number. The token is read where Claude Code stores it and is never
+# refreshed here: refresh tokens rotate, and racing Claude Code for one logs it out.
+USAGE_URL="https://api.anthropic.com/api/oauth/usage"
+USAGE_CACHE="$STATE_DIR/usage.json"
+USAGE_TTL=30    # seconds a reading is shared before it is asked again
+USAGE_WAIT=3    # seconds one fetch may hold up the statusline
+
+sha256_16() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -c1-16
+}
+
+# The login token for the next request: MODEL_GUARD_CREDENTIALS (tests), else the
+# environment, the macOS keychain item Claude Code writes, the credentials file.
+oauth_token() {
+  local blob=""
+  if [ -n "${MODEL_GUARD_CREDENTIALS:-}" ]; then
+    blob=$(cat "$MODEL_GUARD_CREDENTIALS" 2>/dev/null || true)
+  elif [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+    printf '%s' "$CLAUDE_CODE_OAUTH_TOKEN"; return 0
+  else
+    if [ "$(uname -s)" = Darwin ] && command -v security >/dev/null 2>&1; then
+      local service="Claude Code-credentials"
+      [ -n "${CLAUDE_CONFIG_DIR:-}" ] && service+="-$(printf '%s' "$CLAUDE_CONFIG_DIR" | sha256_16 | cut -c1-8)"
+      blob=$(security find-generic-password -a "${USER:-claude-code-user}" -w -s "$service" 2>/dev/null || true)
+    fi
+    [ -n "$blob" ] || blob=$(cat "$CREDENTIALS" 2>/dev/null || true)
+  fi
+  [ -n "$blob" ] && printf '%s' "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null
+  return 0
+}
+
+# Writes the cache for one login: both utilisations on HTTP 200, only the status
+# otherwise (a failure is not asked again before the TTL runs out either).
+usage_fetch() {  # <token> <key> <now>
+  local body="$USAGE_CACHE.$$.body" tmp="$USAGE_CACHE.$$" code
+  code=$(printf 'header = "Authorization: Bearer %s"\n' "$1" | curl -sS -K - --max-time "$USAGE_WAIT" \
+           -A "model-guard/$MG_VERSION" -o "$body" -w '%{http_code}' "$USAGE_URL" 2>/dev/null) || code=000
+  if [ "$code" = 200 ] && jq -e '.five_hour.utilization != null' "$body" >/dev/null 2>&1; then
+    jq -c --arg key "$2" --argjson at "$3" \
+      '{key: $key, at: $at, http: 200, five_hour: (.five_hour.utilization | floor),
+        seven_day: (.seven_day.utilization | if . == null then null else floor end),
+        resets_at: .five_hour.resets_at}' "$body" > "$tmp" 2>/dev/null
+  else
+    jq -nc --arg key "$2" --argjson at "$3" --arg http "$code" \
+      '{key: $key, at: $at, http: (($http | tonumber?) // 0)}' > "$tmp" 2>/dev/null
+  fi
+  mv -f "$tmp" "$USAGE_CACHE" 2>/dev/null; rm -f "$body" "$tmp"
+}
+
+# Prints the cached reading of the current login (JSON), asking first when the cache is
+# missing, belongs to another login, or is older than USAGE_TTL. Prints nothing while
+# another session is asking for a new login. Returns 1 when there is no login token
+# (API key, third-party providers).
+usage_reading() {
+  local tok key now cached at lock lock_at
+  tok=$(oauth_token); [ -n "$tok" ] || return 1
+  key=$(printf '%s' "$tok" | sha256_16)
+  now=$(date +%s)
+  cached=$(cat "$USAGE_CACHE" 2>/dev/null || true)
+  at=$(printf '%s' "$cached" | jq -r '.at // 0' 2>/dev/null)
+  if [ "$(printf '%s' "$cached" | jq -r '.key // empty' 2>/dev/null)" != "$key" ] || \
+     [ $(( now - ${at:-0} )) -ge "$USAGE_TTL" ]; then
+    lock="$USAGE_CACHE.lock"
+    mkdir -p "$STATE_DIR" 2>/dev/null && chmod 700 "$STATE_DIR" 2>/dev/null
+    # a fetch killed half-way leaves its lock behind; older than a fetch can take = stale
+    lock_at=$(cat "$lock/at" 2>/dev/null || true)
+    if [ -d "$lock" ] && [ $(( now - ${lock_at:-0} )) -gt $(( USAGE_WAIT + 2 )) ]; then
+      rm -rf "$lock"
+    fi
+    if mkdir "$lock" 2>/dev/null; then
+      printf '%s' "$now" > "$lock/at"
+      usage_fetch "$tok" "$key" "$now"
+      rm -rf "$lock"
+      cached=$(cat "$USAGE_CACHE" 2>/dev/null || true)
+    fi
+  fi
+  printf '%s' "$cached" | jq -c --arg key "$key" 'select(.key == $key)' 2>/dev/null
+  return 0
+}
+
+# What the band shows: the account's own numbers when a login token is at hand, else
+# what this session last saw in a response header.
+if usage=$(usage_reading); then
+  limit_5h=$(printf '%s' "$usage" | jq -r '.five_hour // empty' 2>/dev/null)
+  limit_7d=$(printf '%s' "$usage" | jq -r '.seven_day // empty' 2>/dev/null)
+else
+  limit_5h=$seen_5h; limit_7d=$seen_7d
 fi
 
 # ---- language: conf override > Claude Code "language" setting > English ----
@@ -280,9 +388,12 @@ case "${warn_at:-80}" in
   *[!0-9]*|"") warn_at=80;;
   *)           warn_at=${warn_at:-80};;
 esac
-if [ -n "$warn_at" ] && [ -n "$limit_pct" ] && [ "$limit_pct" -ge "$warn_at" ] 2>/dev/null; then
-  printf -v t "$T_LIMIT" "$limit_pct"
+if [ -n "$warn_at" ] && [ -n "$limit_5h" ] && [ "$limit_5h" -ge "$warn_at" ] 2>/dev/null; then
+  printf -v t "$T_LIMIT" "$limit_5h"
   seg+=" ${ALARM} ${t} ${band}"
+elif [ "$(conf_get SHOW_LIMIT)" != false ] && [ -n "$limit_5h" ]; then
+  seg+=" ┃ ⏳ 5h ${limit_5h}%"
+  [ -n "$limit_7d" ] && seg+=" · 7d ${limit_7d}%"
 fi
 
 acct_seg=""

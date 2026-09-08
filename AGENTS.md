@@ -9,7 +9,7 @@ A Claude Code plugin (`model-guard`, distributed from this repo as marketplace `
 | `.claude-plugin/plugin.json` | Plugin manifest: name, version, description, keywords. |
 | `.claude-plugin/marketplace.json` | The marketplace this repo is; lists the one plugin with `source: ./`. |
 | `hooks/hooks.json` | Registers `scripts/guard-hook.sh` on SessionStart, SessionEnd, PreModelSwitch, PostModelSwitch, PreToolUse, Stop, UserPromptSubmit; `check-install.sh` on SessionStart. |
-| `scripts/statusline.sh` | The statusline. `setup` copies it to `~/.claude/model-guard.sh`; that copy is what Claude Code runs. |
+| `scripts/statusline.sh` | The statusline. `setup` copies it to `~/.claude/model-guard.sh`; that copy is what Claude Code runs. Asks Claude Code's usage endpoint for the logged-in account's rate-limit usage, cached in `usage.json` under the state dir. |
 | `scripts/lib.sh` | Shared helpers (`mg_*`): config, language, model strength ranking, per-session state, keystroke channels. Sourced by the hook and the driver. |
 | `scripts/guard-hook.sh` | The one hook command; dispatches on `hook_event_name`, answers with hook JSON. |
 | `scripts/recover.sh` | The detached driver that types Esc, `/model`, `/effort`, continue prompt into the terminal. |
@@ -25,13 +25,13 @@ A Claude Code plugin (`model-guard`, distributed from this repo as marketplace `
 tests/run.sh      # the whole suite (state machine, driver, channel detection, bands); must end "0 failed"
 ```
 
-Requirements: bash 4+ and jq; the recovery path also uses `flock` and `setsid`. There is no CI workflow — `tests/run.sh` on the machine is the bar. Hooks load at session start, so a change under `hooks/` or `scripts/` is only observed by a freshly started session, and the statusline change only after the installed copy is refreshed.
+Requirements: bash 4+, jq and curl; the recovery path also uses `flock` and `setsid`. There is no CI workflow — `tests/run.sh` on the machine is the bar. Hooks load at session start, so a change under `hooks/` or `scripts/` is only observed by a freshly started session, and the statusline change only after the installed copy is refreshed.
 
 ## Hard rules
 
 - **The version lives in four places and must match**: `.claude-plugin/plugin.json`, `MG_VERSION` in `scripts/statusline.sh`, `MG_VERSION` in `scripts/lib.sh`, the top entry of `CHANGELOG.md`. `check-install.sh` decides whether to refresh a user's installed statusline by comparing `MG_VERSION` — a release that bumps plugin.json but not `MG_VERSION` leaves every user on the old script, silently.
 - **The installed statusline is a copy** (`~/.claude/model-guard.sh`). Editing `scripts/statusline.sh` changes nothing in a running session until the copy is refreshed (session-start hook or `setup`).
-- **Config, settings and state are resolved through the `MODEL_GUARD_*` overrides** (`MODEL_GUARD_CONF`, `MODEL_GUARD_SETTINGS`, `MODEL_GUARD_STATE_DIR`, `MODEL_GUARD_SESSIONS_DIR`) in `lib.sh` and `statusline.sh`; the tests point them at a temp dir. A new read of `~/.claude/...` that bypasses them makes the suite touch the real machine.
+- **Config, settings, state and the login token are resolved through the `MODEL_GUARD_*` overrides** (`MODEL_GUARD_CONF`, `MODEL_GUARD_SETTINGS`, `MODEL_GUARD_STATE_DIR`, `MODEL_GUARD_SESSIONS_DIR`, and `MODEL_GUARD_CREDENTIALS`, which also switches off the environment and keychain lookups) in `lib.sh` and `statusline.sh`; the tests point them at a temp dir and put a stand-in `curl` first on `PATH`. A new read of `~/.claude/...` that bypasses them makes the suite touch the real machine or the network.
 - **Hooks are silent unless they act.** Session start, upgrades, and switches from the named user-driven sources (`command`, `picker`, `sdk`, `config`, `fast_mode`, `slash_command`) produce no output and no state; every other switch source to a weaker model starts a recovery episode. The suite asserts both directions.
 - **Keystrokes address one pane by id, never the focused window** — tmux `$TMUX_PANE`, zellij `terminal_<ZELLIJ_PANE_ID>`, kitty `$KITTY_WINDOW_ID`. A missing or non-numeric pane id means "no channel", not a guess.
 - **A recovery never changes tomorrow's default.** `/model <id>` also writes `model` into `settings.json`; the driver restores the previous default afterwards, and the suite checks it.

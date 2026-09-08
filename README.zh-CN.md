@@ -8,7 +8,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Made for Claude Code](https://img.shields.io/badge/made%20for-Claude%20Code-d97757)](https://claude.com/claude-code)
-[![Deps](https://img.shields.io/badge/deps-bash%20%2B%20jq-4EAA25)](#安装)
+[![Deps](https://img.shields.io/badge/deps-bash%20%2B%20jq%20%2B%20curl-4EAA25)](#安装)
 [![Languages](https://img.shields.io/badge/band%20languages-8-8A2BE2)](#配置)
 
 [English](README.md) · 简体中文
@@ -41,7 +41,7 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 - 🧠 **扩展思考**被关闭
 - ⏳ **5 小时限额窗口 ≥ 80%**——强制回退的前兆，在降级发生*之前*就预警
 
-外加日常实用信息：当前模型与思考强度、上下文用量、当前登录账号（多账号切换党懂的）。
+外加日常实用信息：当前模型与思考强度、上下文用量、这个账号的 5 小时和 7 天用量（`⏳ 5h 37% · 7d 18%`）、当前登录账号（多账号切换党懂的）。
 
 ## 自动恢复
 
@@ -76,7 +76,7 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 
 > **为什么还要 setup 这一步？** Claude Code 插件目前无法自行注册主状态栏（插件的 `settings.json` 只支持 `agent` 和 `subagentStatusLine` 两个键）。`setup` 是唯一逃不掉的一步，而且只需跑这一次：以后插件更新带来新脚本时，session 启动钩子会自己把装好的那份换成新的，并在屏幕上说一句。
 
-**依赖：** bash 4+ 和 [`jq`](https://jqlang.github.io/jq/)；恢复钩子另外用到 `flock`、`setsid`（util-linux），有 `notify-send` 时会发一条桌面通知。没有守护进程，不联网。插件钩子在 session 启动时加载——装好或更新后请重开 session。
+**依赖：** bash 4+、[`jq`](https://jqlang.github.io/jq/) 和 `curl`；恢复钩子另外用到 `flock`、`setsid`（util-linux），有 `notify-send` 时会发一条桌面通知。没有守护进程。唯一的联网动作是状态栏拿 Claude Code 存下来的登录令牌，去问 Claude Code 自己的用量接口（`/usage` 命令用的那个）要这个账号的限额用量，每台机器最多 30 秒问一次；别的什么都不往外发。插件钩子在 session 启动时加载——装好或更新后请重开 session。
 
 ## 「降级」是怎么判定的
 
@@ -93,6 +93,12 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 - 实际**高于**预期 → 🟦 冷静的蓝色。白捡的升级不算急事。
 - 自动降级（Claude Code 的 `PostModelSwitch` 事件，来源为 `auto` 或 `resume`）用同一套强度序判断要不要启动恢复。
 
+## 用量数字从哪来
+
+5 小时和 7 天这两个百分比是**你这个账号的**：状态栏拿 Claude Code 存下来的登录令牌，去问 Claude Code 自己 `/usage` 命令用的那个用量接口。令牌依次从环境变量、macOS 钥匙串、`~/.claude/.credentials.json` 里找。同一台机器上所有 session 共用一份读数，30 秒内不重复问。
+
+它故意不用 Claude Code 递给状态栏的 `rate_limits`。那个值是某一个 session 最后一次从接口响应头里读到的数：这个 session 不再收到回复它就不动，`/login` 换号也不会清掉。换号之后它照旧报的是上一个账号的数，而且还在涨，因为切换那一刻没跑完的请求仍然记在旧账号上。这里换号等于换了缓存的键，下一次刷新立刻重新问；答案回来之前这一段留空，绝不显示另一个账号的数。没有登录令牌的 session（API key、Bedrock、Vertex）退回用 Claude Code 递来的值。
+
 ## 配置
 
 全部配置在 `~/.claude/model-guard.conf`（由 `setup` 创建，也可手改）：
@@ -102,6 +108,7 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 | `LANGUAGE` | `auto` | 横幅语言。`auto` 跟随 Claude Code 的 `language` 设置，否则英文。可选：`en` `zh` `ja` `ko` `es` `fr` `de` `pt` |
 | `SHOW_ACCOUNT` | `true` | 显示当前登录账号邮箱（实时读 `~/.claude.json`，换号自动跟随） |
 | `SHOW_CONTEXT` | `true` | 显示上下文用量，如 `◔ 13%` |
+| `SHOW_LIMIT` | `true` | 显示当前登录账号的 5 小时和 7 天用量，如 `⏳ 5h 37% · 7d 18%`（见上文） |
 | `LIMIT_WARN_AT` | `80` | 5 小时限额用量达到 N% 时红色补丁预警。`off` 关闭 |
 | `EXPECTED_MODEL` | *(自动)* | 手动指定预期模型 pattern，如 `opus\|fable` |
 | `RECOVER` | `on` | 恢复钩子总开关（`off` 则停与切都不做） |

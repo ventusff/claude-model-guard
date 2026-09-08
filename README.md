@@ -8,7 +8,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Made for Claude Code](https://img.shields.io/badge/made%20for-Claude%20Code-d97757)](https://claude.com/claude-code)
-[![Deps](https://img.shields.io/badge/deps-bash%20%2B%20jq-4EAA25)](#install)
+[![Deps](https://img.shields.io/badge/deps-bash%20%2B%20jq%20%2B%20curl-4EAA25)](#install)
 [![Languages](https://img.shields.io/badge/band%20languages-8-8A2BE2)](#configuration)
 
 English · [简体中文](README.zh-CN.md)
@@ -41,7 +41,7 @@ And model identity is only half the story. Red **inline patches** catch the othe
 - 🧠 **Extended thinking** switched off
 - ⏳ **5-hour rate-limit window ≥ 80 %** — the precondition for a forced fallback, flagged *before* it happens
 
-Plus the useful everyday bits: current model & effort, context-window usage, and which account you're logged in with (multi-account users know the pain).
+Plus the useful everyday bits: current model & effort, context-window usage, your account's 5-hour and 7-day usage (`⏳ 5h 37% · 7d 18%`), and which account you're logged in with (multi-account users know the pain).
 
 ## Auto-recovery
 
@@ -76,7 +76,7 @@ The last step is **interactive** — arrow keys, two questions, done. It copies 
 
 > **Why is there a setup step at all?** Claude Code plugins can't register a main statusline by themselves (plugin `settings.json` only supports `agent` and `subagentStatusLine`). `setup` is the one honest extra step, and it is a one-time one: when a later plugin update ships a newer script, the session-start hook refreshes the installed copy itself and says so.
 
-**Requirements:** bash 4+ and [`jq`](https://jqlang.github.io/jq/); the recovery hooks also use `flock` and `setsid` (util-linux) and, when present, `notify-send` for a desktop notice. No daemon, nothing phones home. Plugin hooks load at session start — restart your sessions after installing or updating.
+**Requirements:** bash 4+, [`jq`](https://jqlang.github.io/jq/) and `curl`; the recovery hooks also use `flock` and `setsid` (util-linux) and, when present, `notify-send` for a desktop notice. No daemon. The one network call is the statusline asking Claude Code's own usage endpoint (the one behind `/usage`) for your account's rate-limit usage, with the login token Claude Code stored, at most once every 30 s per machine; nothing else leaves the machine. Plugin hooks load at session start — restart your sessions after installing or updating.
 
 ## How "downgraded" is decided
 
@@ -93,6 +93,12 @@ The last step is **interactive** — arrow keys, two questions, done. It copies 
 - Actual ranks **above** expected → 🟦 calm blue. Free upgrades are not emergencies.
 - Automatic downgrades (Claude Code's `PostModelSwitch` with source `auto` or `resume`) use the same ranking to decide whether a recovery starts.
 
+## Where the usage numbers come from
+
+The 5-hour and 7-day numbers are your **account's**, asked from Claude Code's own usage endpoint (the one behind `/usage`) with the login token Claude Code stored — environment variable, macOS keychain or `~/.claude/.credentials.json`, in that order. One reading is shared by every session on the machine for 30 s.
+
+They are deliberately not the `rate_limits` Claude Code hands to statuslines. That value is what one session last read from a response header: it stands still until that session gets another response, and it survives `/login`. After an account switch it keeps reporting the previous account — and keeps climbing while requests already in flight finish on the old token. Here a new login is a new cache key, so the next refresh asks again immediately; until the answer is in, the segment stays empty rather than showing another account's number. Sessions without a login token (API key, Bedrock, Vertex) fall back to the payload value.
+
 ## Configuration
 
 Everything lives in `~/.claude/model-guard.conf` (created by `setup`, safe to edit by hand):
@@ -102,6 +108,7 @@ Everything lives in `~/.claude/model-guard.conf` (created by `setup`, safe to ed
 | `LANGUAGE` | `auto` | Band language. `auto` follows Claude Code's `language` setting, else English. Available: `en` `zh` `ja` `ko` `es` `fr` `de` `pt` |
 | `SHOW_ACCOUNT` | `true` | Show the logged-in account email (reads `~/.claude.json` live — switching accounts updates the band) |
 | `SHOW_CONTEXT` | `true` | Show context-window usage, e.g. `◔ 13%` |
+| `SHOW_LIMIT` | `true` | Show the logged-in account's 5-hour and 7-day usage, e.g. `⏳ 5h 37% · 7d 18%` (see above) |
 | `LIMIT_WARN_AT` | `80` | Red patch when the 5-hour rate-limit usage reaches N %. `off` disables |
 | `EXPECTED_MODEL` | *(auto)* | Manual expected-model pattern, e.g. `opus\|fable` |
 | `RECOVER` | `on` | Master switch for the recovery hooks (`off` disables stop + switch entirely) |

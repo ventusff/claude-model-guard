@@ -5,8 +5,10 @@ set -u
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 export MODEL_GUARD_STATE_DIR="$tmp/state" MODEL_GUARD_CONF="$tmp/model-guard.conf" \
-       MODEL_GUARD_SETTINGS="$tmp/settings.json" MODEL_GUARD_SESSIONS_DIR="$tmp/sessions"
-unset KITTY_LISTEN_ON KITTY_WINDOW_ID TMUX TMUX_PANE ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID
+       MODEL_GUARD_SETTINGS="$tmp/settings.json" MODEL_GUARD_SESSIONS_DIR="$tmp/sessions" \
+       MODEL_GUARD_CREDENTIALS="$tmp/credentials.json"
+unset KITTY_LISTEN_ON KITTY_WINDOW_ID TMUX TMUX_PANE ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID \
+      CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR
 mkdir -p "$tmp/sessions"
 printf 'LANGUAGE=en\nRECOVER_CHANNEL=dryrun\nRECOVER_MODEL=claude-opus-5[1m]\nRECOVER_EFFORT=max\nRECOVER_MAX=2\n' > "$MODEL_GUARD_CONF"
 printf '{"model":"claude-fable-5-1[1m]","effortLevel":"xhigh"}\n' > "$MODEL_GUARD_SETTINGS"
@@ -215,6 +217,68 @@ check "opus-5 below fable alarms" 'grep -q "DOWNGRADED" <<<"$out"'
 printf 'LANGUAGE=en\nSHOW_ACCOUNT=false\nEXPECTED_MODEL=claude-opus-4-8\n' > "$MODEL_GUARD_CONF"
 out=$(printf '{"session_id":"nostate","model":{"id":"claude-opus-5","display_name":"Opus 5"}}' | HOME="$tmp" "$sl")
 check "opus-5 above expected opus-4-8 is an upgrade, not an alarm" 'grep -q "above default" <<<"$out"'
+
+echo "== usage of the logged-in account"
+mkdir -p "$tmp/bin"
+cat > "$tmp/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+# stand-in for curl: logs the call and the config it was handed, answers with
+# $FAKE_USAGE_HTTP and $FAKE_USAGE_BODY
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out=$2; shift;;
+    -K) [ "$2" = - ] && cat > "$FAKE_USAGE_CONFIG"; shift;;
+  esac
+  shift
+done
+echo call >> "$FAKE_USAGE_LOG"
+[ -n "$out" ] && printf '%s' "$FAKE_USAGE_BODY" > "$out"
+printf '%s' "$FAKE_USAGE_HTTP"
+EOF
+chmod +x "$tmp/bin/curl"
+export PATH="$tmp/bin:$PATH" FAKE_USAGE_LOG="$tmp/usage-calls.log" FAKE_USAGE_CONFIG="$tmp/usage-curl.config"
+export FAKE_USAGE_HTTP=200 FAKE_USAGE_BODY=""
+body(){ printf '{"five_hour":{"utilization":%s,"resets_at":"2026-09-08T10:30:00+00:00"},"seven_day":{"utilization":%s,"resets_at":"2026-09-13T20:00:00+00:00"}}' "$1" "$2"; }
+calls(){ if [ -f "$FAKE_USAGE_LOG" ]; then wc -l < "$FAKE_USAGE_LOG" | tr -d ' '; else echo 0; fi; }
+creds(){ printf '{"claudeAiOauth":{"accessToken":"%s","scopes":["user:profile"]}}' "$1" > "$MODEL_GUARD_CREDENTIALS"; }
+cache="$MODEL_GUARD_STATE_DIR/usage.json"
+band(){ printf '{"session_id":"nostate","model":{"id":"claude-fable-5-1[1m]","display_name":"Fable 5.1"},"rate_limits":{"five_hour":{"used_percentage":99},"seven_day":{"used_percentage":21}}}' | HOME="$tmp" "$sl"; }
+printf 'LANGUAGE=en\nSHOW_ACCOUNT=false\n' > "$MODEL_GUARD_CONF"
+rm -f "$cache" "$FAKE_USAGE_LOG"
+creds token-A; FAKE_USAGE_BODY=$(body 37.0 18.0)
+out=$(band)
+check "the reading is the account's, not the payload's" 'grep -q "⏳ 5h 37% · 7d 18%" <<<"$out" && ! grep -q "99" <<<"$out"'
+check "the token travels in a curl config on stdin, not on the command line" 'grep -q "Bearer token-A" "$FAKE_USAGE_CONFIG"'
+check "asked once" '[ "$(calls)" = 1 ]'
+out=$(band)
+check "a refresh inside the TTL reuses the reading" '[ "$(calls)" = 1 ] && grep -q "5h 37%" <<<"$out"'
+creds token-B; FAKE_USAGE_BODY=$(body 5.0 58.0)
+out=$(band)
+check "a new login is asked at once" '[ "$(calls)" = 2 ] && grep -q "⏳ 5h 5% · 7d 58%" <<<"$out"'
+mkdir "$cache.lock"; date +%s > "$cache.lock/at"
+creds token-C
+out=$(band)
+check "another session asking for a new login: empty, never the previous account" '[ "$(calls)" = 2 ] && ! grep -q "⏳" <<<"$out"'
+printf '%s' $(( $(date +%s) - 60 )) > "$cache.lock/at"
+out=$(band)
+check "a lock left behind by a killed fetch is taken over" '[ "$(calls)" = 3 ] && grep -q "5h 5%" <<<"$out"'
+check "lock released after the fetch" '[ ! -d "$cache.lock" ]'
+creds token-D; FAKE_USAGE_HTTP=401; FAKE_USAGE_BODY='{"type":"error"}'
+out=$(band)
+check "rejected token: empty segment, no fallback to the payload" '[ "$(calls)" = 4 ] && ! grep -q "⏳" <<<"$out" && ! grep -q "99" <<<"$out"'
+out=$(band)
+check "a failure is not asked again inside the TTL" '[ "$(calls)" = 4 ]'
+creds token-E; FAKE_USAGE_HTTP=200; FAKE_USAGE_BODY=$(body 85.0 20.0)
+out=$(band)
+check "5h at the warning threshold: red patch from the account's reading" 'grep -q "5h limit 85%!" <<<"$out" && ! grep -q "7d" <<<"$out"'
+printf 'LANGUAGE=en\nSHOW_ACCOUNT=false\nSHOW_LIMIT=false\n' > "$MODEL_GUARD_CONF"
+creds token-F; FAKE_USAGE_BODY=$(body 37.0 18.0)
+out=$(band)
+check "SHOW_LIMIT=false hides the plain reading" '! grep -q "⏳" <<<"$out"'
+rm -f "$MODEL_GUARD_CREDENTIALS"; n=$(calls)
+out=$(band)
+check "no login token: the payload's own reading, nothing asked" '[ "$(calls)" = "$n" ] && grep -q "5h limit 99%!" <<<"$out"'
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

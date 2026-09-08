@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.0 — 2026-09-08
+
+- **The rate-limit reading is the logged-in account's.** The 5-hour and 7-day
+  usage is asked from Claude Code's own usage endpoint (the one behind `/usage`)
+  with the stored login token, one reading per machine shared by every session
+  for 30 s. The `rate_limits` in the statusline payload is what one session last
+  read from a response header: it stands still until that session gets another
+  response and it survives `/login`, so after an account switch the band kept
+  reporting — and updating — the previous account. Now a new login is asked at
+  once; until the answer is in, the segment is empty rather than another
+  account's number. Sessions without a login token keep the payload value.
+- **`SHOW_LIMIT`** (default `true`) puts `⏳ 5h 37% · 7d 18%` in the everyday
+  band. The `LIMIT_WARN_AT` red patch is unchanged and reads the same source.
+- The account email and the credentials follow `CLAUDE_CONFIG_DIR`.
+
 ## 1.2.0 — 2026-09-06
 
 - **zellij is a recovery channel.** `auto` now tries a tmux pane, then the zellij
