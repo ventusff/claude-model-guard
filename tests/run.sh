@@ -218,6 +218,39 @@ printf 'LANGUAGE=en\nSHOW_ACCOUNT=false\nEXPECTED_MODEL=claude-opus-4-8\n' > "$M
 out=$(printf '{"session_id":"nostate","model":{"id":"claude-opus-5","display_name":"Opus 5"}}' | HOME="$tmp" "$sl")
 check "opus-5 above expected opus-4-8 is an upgrade, not an alarm" 'grep -q "above default" <<<"$out"'
 
+echo "== effort defaults follow the current model"
+printf 'LANGUAGE=en\nSHOW_ACCOUNT=false\nEXPECTED_MODEL=claude-fable-5-1\n' > "$MODEL_GUARD_CONF"
+effort_band(){
+  jq -nc --arg model "${2:-claude-fable-5-1[1m]}" --arg effort "$1" \
+    '{session_id:"effort-test",model:{id:$model},effort:{level:$effort}}' |
+    CLAUDE_CONFIG_DIR="$tmp/claude-config" "$sl"
+}
+printf '{"effortLevel":"xhigh"}\n' > "$MODEL_GUARD_SETTINGS"
+out=$(effort_band high)
+check "legacy global effort still detects a reduction" 'grep -q "high < default xhigh!" <<<"$out"'
+printf '{"effortLevel":"xhigh","modelSettings":{"claude-fable-5-1":{"effortLevel":"high"},"claude-fable-5":{"effortLevel":"xhigh"}}}\n' > "$MODEL_GUARD_SETTINGS"
+out=$(effort_band high)
+check "saved per-model high overrides stale global xhigh for a 1m session" 'grep -q "⚡high" <<<"$out" && ! grep -q "< default" <<<"$out"'
+out=$(effort_band medium)
+check "a real reduction below the per-model default still warns" 'grep -q "medium < default high!" <<<"$out"'
+out=$(effort_band high claude-fable-5-1)
+check "base model and 1m variant share the effort default" '! grep -q "< default" <<<"$out"'
+out=$(effort_band high claude-fable-5)
+check "another model keeps its own effort default" 'grep -q "high < default xhigh!" <<<"$out"'
+jq '.modelSettings["claude-fable-5-1"].effortLevel="xhigh"' "$MODEL_GUARD_SETTINGS" > "$tmp/effort-settings" && mv "$tmp/effort-settings" "$MODEL_GUARD_SETTINGS"
+out=$(effort_band high)
+check "changing the saved default is visible on the next refresh" 'grep -q "high < default xhigh!" <<<"$out"'
+printf '{"modelSettings":{"claude-fable-5-1":{"effortLevel":"high"},"claude-fable-5-1[1m]":{"effortLevel":"xhigh"}}}\n' > "$MODEL_GUARD_SETTINGS"
+out=$(effort_band high)
+check "canonical model entry wins over a context variant without a global field" '! grep -q "< default" <<<"$out"'
+printf '{"effortLevel":"xhigh","modelSettings":{"claude-fable-5-1":{"effortLevel":"invalid"}}}\n' > "$MODEL_GUARD_SETTINGS"
+out=$(effort_band high)
+check "invalid per-model effort falls back to the valid global default" 'grep -q "high < default xhigh!" <<<"$out"'
+printf '{"modelSettings":{"claude-fable-5-1[1m]":{"effortLevel":"high"}}}\n' > "$MODEL_GUARD_SETTINGS"
+out=$(effort_band medium)
+check "explicit context variant is accepted when no canonical entry exists" 'grep -q "medium < default high!" <<<"$out"'
+printf '{"model":"claude-fable-5-1[1m]","effortLevel":"xhigh"}\n' > "$MODEL_GUARD_SETTINGS"
+
 echo "== usage of the logged-in account"
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/curl" <<'EOF'

@@ -8,7 +8,8 @@
 #   red   🚨  actual model is BELOW your default (silent downgrade) — full-width alarm
 #   blue  ●   no expectation configured — neutral display
 # Red inline patches for the other silent downgrades: reasoning effort lowered below
-# settings.json "effortLevel", extended thinking switched off, and a heads-up when the
+# settings.json per-model effort (falling back to "effortLevel"), thinking switched
+# off, and a heads-up when the
 # 5-hour rate-limit window fills up (which is exactly when forced fallbacks happen).
 # The usage numbers are the logged-in account's own, asked from Claude Code's usage
 # endpoint (see "usage of the logged-in account" below), not the session's last header.
@@ -48,7 +49,7 @@
 # right after the `input=$(cat ...)` line to inspect the full stdin payload
 # (model / effort / thinking / context_window / rate_limits / fast_mode / ...).
 
-MG_VERSION="1.3.0"
+MG_VERSION="1.4.0"
 set -u
 input=$(cat 2>/dev/null || true)
 
@@ -75,7 +76,17 @@ if command -v jq >/dev/null 2>&1; then
   seen_7d=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty | if type=="number" then floor else empty end' 2>/dev/null || true)
   email=$(jq -r '.oauthAccount.emailAddress // empty' "$CLAUDE_JSON" 2>/dev/null || true)
   settings_lang=$(jq -r '.language // empty' "$SETTINGS" 2>/dev/null || true)
-  expected_effort=$(jq -r '.effortLevel // empty' "$SETTINGS" 2>/dev/null || true)
+  # /model and /effort save the current model's default in modelSettings. The old
+  # global effortLevel can remain unchanged. Context variants share a canonical
+  # model key; prefer that key over a manually written [1m] variant, as Claude does.
+  expected_effort=$(jq -r --arg model "$model_id" '
+    def saved_effort: select(. == "low" or . == "medium" or . == "high" or . == "xhigh");
+    (.modelSettings | if type == "object" then . else {} end) as $models |
+    ($model | sub("\\[1[mM]\\]$"; "")) as $key |
+    ($models[$key].effortLevel? | saved_effort) //
+    ($models[$model].effortLevel? | saved_effort) //
+    (.effortLevel | saved_effort) // empty
+  ' "$SETTINGS" 2>/dev/null || true)
   state=""
   [ -n "$session_id" ] && state=$(cat "$STATE_DIR/$session_id.json" 2>/dev/null || true)
 else

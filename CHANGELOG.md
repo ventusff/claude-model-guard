@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.4.0 — 2026-09-09
+
+- **Claude effort defaults follow the model picker.** Read the active model's
+  saved `modelSettings` effort before the legacy global `effortLevel`, including
+  `[1m]` context variants. Saving `high` no longer produces a false `high < xhigh`
+  warning when the old global setting remains `xhigh`; real reductions still warn.
+- **Codex CLI integration.** A persistent two-row terminal band puts requested
+  versus server-reported model routing first, followed by account, reasoning,
+  context and account usage. Matching reports are green, differences red, absent
+  evidence amber; disconnected or stale observers are explicitly red.
+- Uses the official Codex TUI/app-server protocol and an isolated tmux server.
+  No Codex fork, HTTPS interception, credential-file access or model-default edits.
+  Evidence is scoped to the visible thread and current sampling request. The
+  plugin does not infer hidden weights or automatically change Codex models.
+- Reversible bash/zsh installation, pinned Python dependency, Codex plugin skill,
+  English/Chinese display, diagnostics and source-linked routing research.
+- Strict `check` and separate `probe` commands return nonzero when routing is
+  unverified or unavailable, with shareable metadata that omits account identity.
+  Research covers recent GPT-4o claims, community fingerprints, negative controls
+  and live checks; undisclosed backend routing remains unverifiable.
+- Real Codex integration tests cover HTTP/SSE, WebSocket metadata, missing
+  effective headers and a gpt-4o fixture mismatch; PTY tests exercise the actual
+  terminal band and resizing. Claude regression tests cover per-model defaults,
+  legacy settings and changes during a running session.
+
 ## 1.3.0 — 2026-09-08
 
 - **The rate-limit reading is the logged-in account's.** The 5-hour and 7-day

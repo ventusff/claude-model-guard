@@ -4,7 +4,7 @@
 
 # 🚨 model-guard
 
-**抓住 Claude Code 静默降级的状态栏——1.1 起，被安全过滤器 flag 导致的那次降级还会被自动撤销。**
+**为 Claude Code 和 Codex CLI 持续显示模型与账号。Codex 版把服务端回报的模型路由放在首位。**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Made for Claude Code](https://img.shields.io/badge/made%20for-Claude%20Code-d97757)](https://claude.com/claude-code)
@@ -12,6 +12,8 @@
 [![Languages](https://img.shields.io/badge/band%20languages-8-8A2BE2)](#配置)
 
 [English](README.md) · 简体中文
+
+[Codex CLI](#codex-cli) · [Claude Code](#痛点)
 
 </div>
 
@@ -37,11 +39,13 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 
 模型型号只是一半。红色**内嵌警示补丁**负责其余的静默降级：
 
-- ⚡ **思考强度**低于你配置的 `effortLevel`
+- ⚡ **思考强度**低于当前模型保存的 `modelSettings[model].effortLevel`；未单独设置时回退到全局 `effortLevel`
 - 🧠 **扩展思考**被关闭
 - ⏳ **5 小时限额窗口 ≥ 80%**——强制回退的前兆，在降级发生*之前*就预警
 
 外加日常实用信息：当前模型与思考强度、上下文用量、这个账号的 5 小时和 7 天用量（`⏳ 5h 37% · 7d 18%`）、当前登录账号（多账号切换党懂的）。
+
+每次刷新都会重新读取默认思考强度。在 `/model` 或 `/effort` 中保存 `high` 后，即使旧的全局字段仍是 `xhigh`，状态栏也会跟随更新；之后降到 `medium` 仍会报警。规范的 Claude 模型 ID 与其 `[1m]` 上下文变体共用保存的强度。
 
 ## 自动恢复
 
@@ -77,6 +81,69 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 > **为什么还要 setup 这一步？** Claude Code 插件目前无法自行注册主状态栏（插件的 `settings.json` 只支持 `agent` 和 `subagentStatusLine` 两个键）。`setup` 是唯一逃不掉的一步，而且只需跑这一次：以后插件更新带来新脚本时，session 启动钩子会自己把装好的那份换成新的，并在屏幕上说一句。
 
 **依赖：** bash 4+、[`jq`](https://jqlang.github.io/jq/) 和 `curl`；恢复钩子另外用到 `flock`、`setsid`（util-linux），有 `notify-send` 时会发一条桌面通知。没有守护进程。唯一的联网动作是状态栏拿 Claude Code 存下来的登录令牌，去问 Claude Code 自己的用量接口（`/usage` 命令用的那个）要这个账号的限额用量，每台机器最多 30 秒问一次；别的什么都不往外发。插件钩子在 session 启动时加载——装好或更新后请重开 session。
+
+## Codex CLI
+
+**1.4 新增：**终端底部常驻两行状态栏，把请求模型与**服务端回报的模型路由**放在首位，随后显示账号、推理强度、上下文和用量。本 README 其他部分描述的 Claude Code 行为仍只针对 Claude Code。
+
+<img src="assets/codex.svg" alt="Codex 模型路由与账号状态栏的模拟示例" width="880">
+
+| 横幅 | Codex 中的含义 |
+|---|---|
+| 绿色「服务端回报」 | 最近一次服务端模型标识与请求一致 |
+| 红色「路由变化」 | 服务端回报的模型与请求不同，同时显示两者 |
+| 黄色「路由未验证」 | 这次请求没有可用的有效模型元数据 |
+| 红色「监测中断」 | 观察进程断开、读数过期或元数据无法解析 |
+
+模拟示例：
+
+```text
+ 路由变化 gpt-6-astra → gpt-4o (上轮) | high
+ you@example.com · pro | 上下文 18% | 5h 42% 已用 | 7d 21% 已用
+```
+
+**这是对服务端披露信息的监测，不能独立证明底层权重。**服务商可能不回报、也可能改写元数据。Model Guard 不靠文风、自报身份或测试题猜测隐藏模型。`/model` 中选定的模型，以及缺少有效模型响应头的 `response.model`，都不能让横幅变绿。详见[路由调研与证据边界](codex/model-guard/ROUTING.zh-CN.md)。
+
+本次专门核对了最近的 GPT-4o 路由案例和社区指纹工具，还没有找到可靠识别隐藏模型的办法：所审计的三轮指纹工具没有收录 GPT-4o，离线反例也会得到高概率的模型标签。本机实测没有证实降级。调研记录包含原始来源、源码版本、反例和实测；显示“未验证”不能算解决了剩余的隐藏路由问题。
+
+在本仓库中安装：
+
+```sh
+python3 codex/model-guard/scripts/install.py --language zh
+```
+
+随后打开**新终端**，照常运行 `codex`。依赖：Linux 或 macOS、Python 3.11+、tmux、官方 Codex CLI 0.153.4+。Codex 插件包位于 [`codex/model-guard`](codex/model-guard)；通过个人市场加载后，`codex-model-guard` skill 会执行同一个安装器。当前官方 Codex 状态栏只提供内置项目，单独安装插件不能注册自定义原生横幅。
+
+启动器创建专属 tmux 服务，通过官方的本机 app-server 协议连接 Codex。在 kitty、zellij 和已有 tmux 会话中也可使用，不改原有复用器配置和其他面板。它调用已安装的官方可执行文件，因此 `codex update` 仍照常更新官方版本。不编译或修改 Codex，不拦截 HTTPS，不改默认模型或服务商配置，不读取登录文件，也不写入会话历史。本机协议适配器只在内存中转发对话数据，仅把明确允许的元数据保存在当前用户私有的临时目录中，随被监测会话退出。
+
+每个终端独立绑定自己的会话和轮次，子代理事件不会覆盖父会话的模型。每次模型采样都会重置验证信息；本轮一旦发现不一致，红色告警会保留到轮次结束，结束后的读数标为「上轮」。Codex 版不猜模型强弱排序、不自动切换模型。推理强度是请求设置，不能证明服务端内部实际用了多少推理。
+
+账号身份来自同一个 app-server 的 `account/read`，空闲时最多每 15 秒刷新一次，开始新轮次时也会刷新。自定义服务商显示名称及「账号未知」。ChatGPT 用量来自 `account/rateLimits/read`，每个被监测会话最多每 30 秒查询一次；超过 60 秒的读数不显示。换号时清除用量并使旧查询失效，不接受缺少账号标识的流式限额事件来回填旧账号的读数。
+
+配置位于 `~/.local/share/model-guard-codex/config.json`：`language`（`en` 或 `zh`）和 `show_account`（布尔值）。`MODEL_GUARD_CODEX_HOME` 可指定安装目录，`MODEL_GUARD_CODEX_BIN` 可指定官方可执行文件，`MODEL_GUARD_RUNTIME_DIR` 可指定临时目录的父目录。
+
+```sh
+model-guard-codex check --json   # 严格检查当前被监测终端，不额外请求模型
+model-guard-codex probe --json   # 发起一个单独的只读探针，会消耗服务商用量
+model-guard-codex status --json  # 当前被监测会话，或当前用户的运行中会话列表
+model-guard-codex doctor
+model-guard-codex remove
+```
+
+在被监测终端以外运行 `check` 时，用 `--session 目录` 明确指定；程序不会猜测其他终端的会话。`probe` 可用 `-m 模型 -r 强度` 仅调整该请求，不能替已有会话证明路由。两者退出码均为：`0` 有效模型披露一致，`2` 不一致，`3` 未验证，`4` 监测不可用或探针失败。其 JSON 不含账号和对话文本；`status --json` 则包含横幅显示的账号。
+
+移除时删除受管理的 shell PATH 区块和启动器，保留配置、备份和分版本的 Python 环境，让已有会话正常结束。支持 bash 和 zsh 启动文件。`codex exec` 等非交互命令、管道输入、`resume`/`fork`、显式 `--remote`、`--profile` 以及 `--oss`/`--local-provider` 启动均转交官方 Codex；**resume/fork/profile/remote/本地模型启动没有路由横幅**，会打印提示。远端连接会改变恢复/派生会话的目录选择行为，且目前无法把 profile-v2 的服务商配置层安全地传给独立 app-server。Windows 可在 WSL 中运行。已经打开的终端和会话不会被强行改造。
+
+在 Codex 插件目录中验证：
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install --require-hashes -r requirements.lock
+.venv/bin/pip install --no-deps -e .
+PYTHONPATH=. MODEL_GUARD_INTEGRATION=1 .venv/bin/python -m unittest discover -s tests -v
+```
+
+集成测试使用真实官方 Codex、本机 HTTP/SSE 与 WebSocket 假服务端、真实 tmux 和 PTY；不消耗模型 token，也不使用你的登录凭据。
 
 ## 「降级」是怎么判定的
 

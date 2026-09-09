@@ -1,0 +1,22 @@
+{
+  "name": "model-guard",
+  "version": "1.4.0",
+  "description": "Persistent Codex CLI band for server-reported model routing, account identity, reasoning and usage.",
+  "author": {
+    "name": "ventusff",
+    "url": "https://github.com/ventusff"
+  },
+  "homepage": "https://github.com/ventusff/claude-model-guard#codex-cli",
+  "repository": "https://github.com/ventusff/claude-model-guard",
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Model Guard",
+    "shortDescription": "See server-reported model routing and your Codex account.",
+    "longDescription": "A persistent terminal band using the official Codex CLI. Routing changes are red; missing evidence is explicitly unverified. Includes reversible launcher setup and diagnostics.",
+    "developerName": "ventusff",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": ["Set up Model Guard for my Codex CLI."]
+  }
+}

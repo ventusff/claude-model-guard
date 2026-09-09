@@ -1,0 +1,2 @@
+# Universal wheel: identical dependency on Linux and macOS, Python 3.11+.
+websockets @ https://files.pythonhosted.org/packages/41/63/23572870e01836a98346075b9e17a8bc24a6ddd9800a3204ceee58677f3c/websockets-17.1-py3-none-any.whl --hash=sha256:f221081107b8c48184d99f7019604486376e7ef826037e70aad6b02540732c23

@@ -4,7 +4,7 @@
 
 # 🚨 model-guard
 
-**The statusline that catches silent model downgrades in Claude Code — and, since 1.1, undoes the one a safeguard flag causes.**
+**Model and account visibility for Claude Code and Codex CLI. Codex puts server-reported routing first.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Made for Claude Code](https://img.shields.io/badge/made%20for-Claude%20Code-d97757)](https://claude.com/claude-code)
@@ -12,6 +12,8 @@
 [![Languages](https://img.shields.io/badge/band%20languages-8-8A2BE2)](#configuration)
 
 English · [简体中文](README.zh-CN.md)
+
+[Codex CLI](#codex-cli) · [Claude Code](#the-problem)
 
 </div>
 
@@ -37,11 +39,13 @@ One always-on, full-width color band at the bottom of every session. You don't r
 
 And model identity is only half the story. Red **inline patches** catch the other silent downgrades:
 
-- ⚡ **Reasoning effort** dropped below your configured `effortLevel`
+- ⚡ **Reasoning effort** dropped below the current model's saved `modelSettings[model].effortLevel`, falling back to the global `effortLevel`
 - 🧠 **Extended thinking** switched off
 - ⏳ **5-hour rate-limit window ≥ 80 %** — the precondition for a forced fallback, flagged *before* it happens
 
 Plus the useful everyday bits: current model & effort, context-window usage, your account's 5-hour and 7-day usage (`⏳ 5h 37% · 7d 18%`), and which account you're logged in with (multi-account users know the pain).
+
+The effort baseline is reread on every update. Saving `high` in `/model` or `/effort` takes effect even if the old global field still says `xhigh`; a later drop to `medium` still alarms. Canonical Claude model IDs share their saved effort with their `[1m]` context variants.
 
 ## Auto-recovery
 
@@ -77,6 +81,69 @@ The last step is **interactive** — arrow keys, two questions, done. It copies 
 > **Why is there a setup step at all?** Claude Code plugins can't register a main statusline by themselves (plugin `settings.json` only supports `agent` and `subagentStatusLine`). `setup` is the one honest extra step, and it is a one-time one: when a later plugin update ships a newer script, the session-start hook refreshes the installed copy itself and says so.
 
 **Requirements:** bash 4+, [`jq`](https://jqlang.github.io/jq/) and `curl`; the recovery hooks also use `flock` and `setsid` (util-linux) and, when present, `notify-send` for a desktop notice. No daemon. The one network call is the statusline asking Claude Code's own usage endpoint (the one behind `/usage`) for your account's rate-limit usage, with the login token Claude Code stored, at most once every 30 s per machine; nothing else leaves the machine. Plugin hooks load at session start — restart your sessions after installing or updating.
+
+## Codex CLI
+
+**New in 1.4:** a persistent two-row terminal band, with the requested model and **server-reported model routing** ahead of account, reasoning effort, context and usage. The Claude Code behavior described elsewhere in this README remains specific to Claude Code.
+
+<img src="assets/codex.svg" alt="Synthetic examples of the Codex routing and account band" width="880">
+
+| Band | Codex meaning |
+|---|---|
+| Green `SERVER` | The most recent server model report matches the request |
+| Red `ROUTE DIFF` | A reported model differs from the request; the band names both |
+| Amber `ROUTE UNVERIFIED` | No usable effective-model metadata for this request |
+| Red `MONITOR LOST` | The observer is disconnected, stale or unable to parse metadata |
+
+Synthetic example:
+
+```text
+ ROUTE DIFF gpt-6-astra → gpt-4o (last turn) | high
+ you@example.com · pro | ctx 18% | 5h 42% used | 7d 21% used
+```
+
+**This is disclosure monitoring, not proof of the underlying weights.** A provider can omit or rewrite its metadata. Model Guard does not identify a hidden backend from writing style, self-identification or test questions. A model selected in `/model`, and even a `response.model` value without effective-model headers, cannot make this band green. See the [routing research and evidence boundaries](codex/model-guard/ROUTING.md).
+
+Recent GPT-4o claims and community fingerprint tools were investigated before shipping this integration. No reliable hidden-model detector was found: the inspected three-probe fingerprint bank does not include GPT-4o, and offline controls can receive high-confidence model labels. Live development-machine checks did not establish a downgrade. The research includes original sources, inspected versions and measurements; an unverified band does not resolve the remaining observability gap.
+
+Install from this checkout:
+
+```sh
+python3 codex/model-guard/scripts/install.py --language en
+```
+
+Then open a **new terminal** and run `codex` normally. Requirements: Linux or macOS, Python 3.11+, tmux, official Codex CLI 0.153.4+. The Codex plugin bundle is [`codex/model-guard`](codex/model-guard); its `codex-model-guard` skill runs the same installer when loaded through a personal marketplace. Installation alone cannot add a custom native footer: current stock Codex only exposes built-in status items.
+
+The launcher creates its own tmux server and uses Codex's official local app-server protocol. It also works inside kitty, zellij and another tmux session; your multiplexer configuration and other panes are untouched. It uses the installed official executable, so `codex update` continues to update that executable. It does not compile or patch Codex, intercept HTTPS, change model/provider defaults, read login files, or write session history. The local protocol adapter forwards conversation data in memory and retains only allowlisted metadata in an owner-only temporary directory. It exits with the guarded session.
+
+Each terminal is bound to its own session and turn. Agent events cannot replace the parent's model. Evidence is reset for a new sampling request; a mismatch stays red for the rest of the turn, and completed-turn readings say `last turn`. No model strength ordering or automatic switching is inferred for Codex. Reasoning effort is the requested setting, not proof of hidden reasoning.
+
+Account identity comes from the same app-server's `account/read`, refreshed at most every 15 seconds while idle and when a turn begins. Custom providers display their provider name and unknown account identity. ChatGPT usage comes from `account/rateLimits/read`, at most once every 30 seconds per guarded session; readings older than 60 seconds are hidden. Account changes invalidate usage and outstanding reads. Unscoped streaming quota events cannot restore the previous account's usage.
+
+Settings are in `~/.local/share/model-guard-codex/config.json`: `language` (`en` or `zh`) and `show_account` (boolean). Set `MODEL_GUARD_CODEX_HOME` for a different installation directory, `MODEL_GUARD_CODEX_BIN` for an explicit official executable, or `MODEL_GUARD_RUNTIME_DIR` for a temporary-directory parent.
+
+```sh
+model-guard-codex check --json   # Strict check of this guarded terminal; no model request
+model-guard-codex probe --json   # One separate read-only request; consumes provider quota
+model-guard-codex status --json  # This guarded session, or your running sessions
+model-guard-codex doctor
+model-guard-codex remove
+```
+
+`check` accepts `--session DIRECTORY` outside the guarded terminal; it never guesses another terminal's session. `probe` accepts `-m MODEL -r EFFORT` for that request only and does not verify an existing session. Both return `0` for matching effective-model disclosure, `2` for a mismatch, `3` for unverified routing, and `4` for unavailable monitoring or a failed probe. Their JSON omits account identity and conversation text; `status --json` includes the account shown in the band.
+
+Removal deletes the managed shell PATH block and launchers, retaining settings, backups and versioned environments so existing sessions can finish. Bash and zsh startup files are supported. `codex exec`, other noninteractive commands, piped input, `resume`/`fork`, explicit `--remote`, `--profile` and `--oss`/`--local-provider` launches delegate to stock Codex; **resume/fork/profile/remote/local-model launches have no routing band** and print a notice. The remote connection changes resume/fork directory selection, and profile-v2 provider configuration cannot currently be passed safely to a separate app-server. Windows users can use WSL. Existing terminals/sessions are not retrofitted.
+
+Validate the Codex code from its plugin directory:
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install --require-hashes -r requirements.lock
+.venv/bin/pip install --no-deps -e .
+PYTHONPATH=. MODEL_GUARD_INTEGRATION=1 .venv/bin/python -m unittest discover -s tests -v
+```
+
+The integration suite uses the real official Codex, local HTTP/SSE and WebSocket fixtures, and a real tmux/PTY. It does not consume model tokens or use your login.
 
 ## How "downgraded" is decided
 
