@@ -4,7 +4,7 @@
 
 # 🚨 model-guard
 
-**Model and account visibility for Claude Code and Codex CLI. Codex puts server-reported routing first.**
+**Model and account visibility for Claude Code and Codex CLI. Codex flags routing differences and suspicious reasoning usage.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Made for Claude Code](https://img.shields.io/badge/made%20for-Claude%20Code-d97757)](https://claude.com/claude-code)
@@ -84,7 +84,7 @@ The last step is **interactive** — arrow keys, two questions, done. It copies 
 
 ## Codex CLI
 
-**New in 1.4:** a persistent two-row terminal band, with the requested model and **server-reported model routing** ahead of account, reasoning effort, context and usage. The Claude Code behavior described elsewhere in this README remains specific to Claude Code.
+**New in 1.5:** the persistent two-row band combines **server-reported routing with passive reasoning anomaly detection**, including the community's exact-516 signal. It also shows your model, account, reasoning effort, context and quota. The Claude Code behavior described elsewhere in this README remains specific to Claude Code.
 
 <img src="assets/codex.svg" alt="Synthetic examples of the Codex routing and account band" width="880">
 
@@ -93,18 +93,20 @@ The last step is **interactive** — arrow keys, two questions, done. It copies 
 | Green `SERVER` | The most recent server model report matches the request |
 | Red `ROUTE DIFF` | A reported model differs from the request; the band names both |
 | Amber `ROUTE UNVERIFIED` | No usable effective-model metadata for this request |
+| Amber `516 WATCH` | A response in this turn reported exactly 516 reasoning tokens at high or greater effort |
+| Red `REASONING SUSPECT` | At least 3 of the last 5 measured responses hit 516 at high or greater effort; a heuristic warning |
 | Red `MONITOR LOST` | The observer is disconnected, stale or unable to parse metadata |
 
 Synthetic example:
 
 ```text
  ROUTE DIFF gpt-6-astra → gpt-4o (last turn) | high
- you@example.com · pro | ctx 18% | 5h 42% used | 7d 21% used
+ last reasoning 516t · 516 3/12 | you@example.com · pro | ctx 18%
 ```
 
-**This is disclosure monitoring, not proof of the underlying weights.** A provider can omit or rewrite its metadata. Model Guard does not identify a hidden backend from writing style, self-identification or test questions. A model selected in `/model`, and even a `response.model` value without effective-model headers, cannot make this band green. See the [routing research and evidence boundaries](codex/model-guard/ROUTING.md).
+**A useful anomaly warning does not require knowing the exact backend model.** Model Guard watches real response usage without extra inference calls. At `high`/`xhigh`/`max`/`ultra`, an exact-516 hit is highlighted through the turn; repeated hits take priority in the band. Counts cover the last 20 measured responses, deduplicate repeated usage snapshots, and reset across model/effort/tier/account changes. The broader 1034/1552/… ladder is exported for inspection but does not trigger the 516 alert. No automatic retry or model change is performed.
 
-Recent GPT-4o claims and community fingerprint tools were investigated before shipping this integration. No reliable hidden-model detector was found: the inspected three-probe fingerprint bank does not include GPT-4o, and offline controls can receive high-confidence model labels. Live development-machine checks did not establish a downgrade. The research includes original sources, inspected versions and measurements; an unverified band does not resolve the remaining observability gap.
+The routing verdict still compares effective server metadata. A provider can omit or rewrite it; neither the selected model, a body `response.model`, nor a 516 hit proves which weights answered. The expanded [research report](codex/model-guard/ROUTING.md) covers Reddit/GitHub findings, a local usage audit, working 516 hooks, statistical fingerprints, KBF and continuation proxies. Statistical detection is feasible; identifying a particular undisclosed backend for every request remains unresolved.
 
 Install from this checkout:
 
@@ -130,7 +132,7 @@ model-guard-codex doctor
 model-guard-codex remove
 ```
 
-`check` accepts `--session DIRECTORY` outside the guarded terminal; it never guesses another terminal's session. `probe` accepts `-m MODEL -r EFFORT` for that request only and does not verify an existing session. Both return `0` for matching effective-model disclosure, `2` for a mismatch, `3` for unverified routing, and `4` for unavailable monitoring or a failed probe. Their JSON omits account identity and conversation text; `status --json` includes the account shown in the band.
+`check` accepts `--session DIRECTORY` outside the guarded terminal; it never guesses another terminal's session. `probe` accepts `-m MODEL -r EFFORT` for that request only and does not verify an existing session. Both return `0` for matching effective-model disclosure, `2` for a mismatch, `3` for unverified routing, and `4` for unavailable monitoring or a failed probe. The separate JSON `reasoning.alert` field is `none`, `watch` or `suspect`; a routing match can coexist with a reasoning warning. Their JSON omits account identity and conversation text; `status --json` includes the account shown in the band.
 
 Removal deletes the managed shell PATH block and launchers, retaining settings, backups and versioned environments so existing sessions can finish. Bash and zsh startup files are supported. `codex exec`, other noninteractive commands, piped input, `resume`/`fork`, explicit `--remote`, `--profile` and `--oss`/`--local-provider` launches delegate to stock Codex; **resume/fork/profile/remote/local-model launches have no routing band** and print a notice. The remote connection changes resume/fork directory selection, and profile-v2 provider configuration cannot currently be passed safely to a separate app-server. Windows users can use WSL. Existing terminals/sessions are not retrofitted.
 

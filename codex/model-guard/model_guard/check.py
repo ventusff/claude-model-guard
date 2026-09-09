@@ -12,6 +12,7 @@ from websockets.exceptions import ConnectionClosed
 from . import __version__
 from .relay import MAX_MESSAGE, Relay, object_from_json
 from .state import State, model_id
+from .reasoning import Reasoning, alert_text, token_count, usage_text
 
 
 EXIT_CODES = {"reported_match": 0, "reported_mismatch": 2, "unverified": 3, "unavailable": 4}
@@ -42,7 +43,25 @@ def verdict(snapshot, scope="current_session"):
         "observed_at": observed_at if observed else None,
         "turn_running": thread.get("running") is True,
         "weights_verified": False,
+        "reasoning": export_reasoning(thread.get("reasoning")),
     }
+
+
+def export_reasoning(signal):
+    if not isinstance(signal, dict):
+        return None
+    result = Reasoning().summary()
+    for key, default in result.items():
+        value = signal.get(key)
+        if type(default) is int:
+            result[key] = token_count(value) or 0
+    result["last_tokens"] = token_count(signal.get("last_tokens"))
+    result["alert"] = signal.get("alert") if signal.get("alert") in ("none", "watch", "suspect") else "none"
+    effort = signal.get("effort")
+    result["effort"] = effort if effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra") else None
+    at = signal.get("observed_at")
+    result["observed_at"] = at if type(at) in (float, int) and 0 <= at < 10**15 else None
+    return result
 
 
 class ProbeReader:
@@ -141,6 +160,11 @@ async def probe(official, model=None, effort=None, timeout=120, cwd=None, option
 
 def format_result(result):
     model = result["server_reported"] or "not disclosed"
+    signal = result.get("reasoning") or {}
+    auxiliary = usage_text(signal)
+    warning = alert_text(signal)
+    if warning:
+        auxiliary += " | " + warning + " (heuristic)"
     return (
         f"Routing: {result['status']}\n"
         f"Requested: {result['requested'] or 'unknown'}\n"
@@ -148,5 +172,6 @@ def format_result(result):
         f"Evidence: {result['source'] or 'none'}\n"
         f"Scope: {result['scope']}\n"
         f"Reason: {result['reason']}\n"
+        f"Reasoning: {auxiliary}\n"
         "Backend weights are not independently verified."
     )

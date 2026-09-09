@@ -81,6 +81,7 @@ def main():
             version = subprocess.check_output([official, "--version"], text=True).strip()
             print(f"Model Guard {__version__}\nOfficial CLI: {official}\n{version}\ntmux: {shutil.which('tmux') or 'MISSING'}\nInstall: {data_home()}")
             print("Evidence: server model metadata; absence is UNVERIFIED. No hidden-backend attestation.")
+            print("Auxiliary: passive reasoning usage and heuristic 516 warnings; no extra model calls.")
             return 0 if shutil.which("tmux") else 1
         if command in ("--version", "version"):
             print(__version__)

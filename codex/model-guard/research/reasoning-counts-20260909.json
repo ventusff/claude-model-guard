@@ -1,0 +1,75 @@
+{
+  "files": 50,
+  "source": "token_usage_record; response_id deduplicated",
+  "groups": [
+    {
+      "requested_model": "gpt-6-astra",
+      "effort": "high",
+      "responses": 964,
+      "zero": 190,
+      "exact_516": 101,
+      "exact_1034": 34,
+      "exact_1552": 15,
+      "ladder_hits": 160,
+      "mean_reasoning_tokens": 330.64,
+      "top_counts": [
+        [
+          0,
+          190
+        ],
+        [
+          516,
+          101
+        ],
+        [
+          1034,
+          34
+        ],
+        [
+          1552,
+          15
+        ],
+        [
+          19,
+          14
+        ]
+      ]
+    },
+    {
+      "requested_model": "gpt-6-astra",
+      "effort": "max",
+      "responses": 1224,
+      "zero": 61,
+      "exact_516": 127,
+      "exact_1034": 42,
+      "exact_1552": 10,
+      "ladder_hits": 186,
+      "mean_reasoning_tokens": 499.61,
+      "top_counts": [
+        [
+          516,
+          127
+        ],
+        [
+          0,
+          61
+        ],
+        [
+          1034,
+          42
+        ],
+        [
+          1552,
+          10
+        ],
+        [
+          23,
+          8
+        ]
+      ]
+    }
+  ],
+  "backend_identity_verified": false,
+  "collection": "2026-09-09; files in session date directories 2026-09-08 and 2026-09-09; each read bounded at initial file size",
+  "interpretation": "Requested labels only. Natural workload with tool rounds and mixed tasks, without correctness labels or independent backend ground truth. Hit rates do not estimate substitution rates."
+}

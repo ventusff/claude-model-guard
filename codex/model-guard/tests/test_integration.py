@@ -22,8 +22,9 @@ from model_guard.state import State
 
 
 class ResponsesFixture:
-    def __init__(self, model):
+    def __init__(self, model, reasoning=None):
         self.model, self.requests = model, []
+        self.reasoning = reasoning or [0]
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -47,11 +48,14 @@ class ResponsesFixture:
         self.worker = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     def events(self):
+        index = len(self.requests) - 1
+        tokens = self.reasoning[min(index, len(self.reasoning) - 1)]
+        response_id = f"resp_test_{index}"
         item = {"id": "msg_test", "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "OK"}]}
         return [
-            {"type": "response.created", "response": {"id": "resp_test", "model": "gpt-4o"}},
+            {"type": "response.created", "response": {"id": response_id, "model": "gpt-4o"}},
             {"type": "response.output_item.done", "output_index": 0, "item": item},
-            {"type": "response.completed", "response": {"id": "resp_test", "status": "completed", "output": [item], "usage": {"input_tokens": 20, "output_tokens": 1, "total_tokens": 21}}},
+            {"type": "response.completed", "response": {"id": response_id, "status": "completed", "output": [item], "usage": {"input_tokens": 20, "output_tokens": tokens + 1, "output_tokens_details": {"reasoning_tokens": tokens}, "total_tokens": tokens + 21}}},
         ]
 
     async def websocket(self, ws):
@@ -77,9 +81,9 @@ class ResponsesFixture:
 
 @unittest.skipUnless(os.environ.get("MODEL_GUARD_INTEGRATION") == "1", "set MODEL_GUARD_INTEGRATION=1 to exercise stock Codex")
 class OfficialCodexTests(unittest.IsolatedAsyncioTestCase):
-    async def exercise(self, observed, websocket=False, probe_mode=False):
+    async def exercise(self, observed, websocket=False, probe_mode=False, reasoning=None):
         binary = os.environ.get("MODEL_GUARD_CODEX_BIN") or shutil.which("codex")
-        with tempfile.TemporaryDirectory(prefix="mg-test-") as temp, ResponsesFixture(observed) as api:
+        with tempfile.TemporaryDirectory(prefix="mg-test-") as temp, ResponsesFixture(observed, reasoning) as api:
             base = Path(temp)
             codex_home = base / "codex"
             codex_home.mkdir()
@@ -126,14 +130,21 @@ class OfficialCodexTests(unittest.IsolatedAsyncioTestCase):
                     response = await self.receive(ws, lambda msg: msg.get("id") == 2)
                     self.assertNotIn("error", response, str(response.get("error")))
                     tid = response["result"]["thread"]["id"]
-                    await ws.send(json.dumps({"id": 3, "method": "turn/start", "params": {"threadId": tid, "input": [{"type": "text", "text": "Reply OK."}]}}))
-                    await self.receive(ws, lambda msg: msg.get("method") == "turn/completed")
+                    for index in range(len(reasoning or [0])):
+                        await ws.send(json.dumps({"id": 3 + index, "method": "turn/start", "params": {"threadId": tid, "input": [{"type": "text", "text": "Reply OK."}]}}))
+                        await self.receive(ws, lambda msg: msg.get("method") == "turn/completed")
                     await asyncio.sleep(0.2)
                     snapshot = state.snapshot()
                     self.assertEqual(api.requests[-1]["model"], "gpt-6-astra")
                     self.assertEqual(snapshot["thread"]["observed"], observed, str(snapshot))
                     self.assertIsNone(snapshot["account"])
                     self.assertEqual(snapshot["thread"]["mismatch"], observed if observed == "gpt-4o" else None)
+                    if reasoning:
+                        signal = snapshot["thread"]["reasoning"]
+                        self.assertEqual(signal["samples"], len(reasoning))
+                        self.assertEqual(signal["exact_516"], reasoning.count(516))
+                        self.assertEqual(signal["last_tokens"], reasoning[-1])
+                        self.assertEqual(signal["alert"], "suspect")
             finally:
                 await relay.close()
                 await stack.aclose()
@@ -172,6 +183,12 @@ class OfficialCodexTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_standalone_probe_cannot_pass_without_evidence(self):
         await self.exercise(None, probe_mode=True)
+
+    async def test_sse_reasoning_signal_without_model_disclosure(self):
+        await self.exercise(None, reasoning=[516, 0, 516, 2000, 516])
+
+    async def test_websocket_reasoning_signal_with_matching_model(self):
+        await self.exercise("gpt-6-astra", websocket=True, reasoning=[516, 0, 516, 2000, 516])
 
 
 if __name__ == "__main__":

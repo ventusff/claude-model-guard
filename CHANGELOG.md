@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.5.0 — 2026-09-09
+
+- **Passive Codex reasoning diagnostics.** Show the last response's reasoning
+  tokens and exact-516 frequency over up to 20 measured responses. At high or
+  greater effort, any exact-516 hit is highlighted through the turn; at least
+  three hits among the last five measurements show `REASONING SUSPECT` in red.
+  These are explicit heuristics, independent of the strict model-routing verdict.
+- Deduplicate usage snapshots, ignore delayed/foreign events, distinguish fresh
+  threads from attached history, and keep observations scoped to the request's
+  model, provider, effort, tier and account. Higher 518n-2 values remain diagnostic
+  counts. No extra inference requests, forced retries or model changes.
+- Export allowlisted reasoning signals in `check`/`probe` JSON and add a standalone
+  metadata-only historical audit. Expanded bilingual research covers Reddit's
+  516 reports, existing hooks/proxies, KBF, PAMELA, fpverify and other fingerprints.
+- Regression tests include genuine official-Codex SSE/WebSocket usage handling,
+  duplicate and stale events, account transitions, and a real 516 TUI warning
+  retained after resizing. Claude behavior retains the 1.4 per-model effort fix.
+
 ## 1.4.0 — 2026-09-09
 
 - **Claude effort defaults follow the model picker.** Read the active model's

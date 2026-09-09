@@ -5,6 +5,8 @@ import re
 import time
 import unicodedata
 
+from .reasoning import Reasoning, alert_text, usage_text
+
 
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,159}\Z")
 REPORT = re.compile(
@@ -46,16 +48,17 @@ class Thread:
     mismatch_requested: str | None = None
     context: int | None = None
     sampling: bool = False
+    turn_effort: str = ""
+    turn_tier: str = ""
+    turn_provider: str = "unknown"
+    reasoning: Reasoning = field(default_factory=Reasoning)
+    usage_suspended: bool = False
+    show_turn_settings: bool = False
 
     def settings(self, data):
         requested = model_id(data.get("model"))
         if requested:
             self.configured = requested
-        if requested and not self.running and requested != self.requested:
-            self.requested = requested
-            self.observed = self.source = self.observed_at = self.mismatch = None
-            self.mismatch_source = self.mismatch_at = None
-            self.mismatch_requested = None
         if isinstance(data.get("modelProvider"), str):
             self.provider = label(data["modelProvider"], 60)
         effort = data.get("effort", data.get("reasoningEffort"))
@@ -63,6 +66,14 @@ class Thread:
             self.effort = label(effort, 20)
         if "serviceTier" in data:
             self.tier = label(data["serviceTier"], 20)
+        if not self.running:
+            if self.configured and self.configured != self.requested:
+                self.requested = self.configured
+                self.observed = self.source = self.observed_at = self.mismatch = None
+                self.mismatch_source = self.mismatch_at = None
+                self.mismatch_requested = None
+            self.show_turn_settings = False
+            self.reasoning.activate((self.requested, self.provider, self.effort, self.tier))
 
     def begin_turn(self, turn_id):
         if self.turn_id != turn_id:
@@ -72,7 +83,16 @@ class Thread:
             self.mismatch_source = self.mismatch_at = None
             self.mismatch_requested = None
             self.sampling = False
+            self.turn_effort, self.turn_tier = self.effort, self.tier
+            self.turn_provider = self.provider
+            self.reasoning.activate(self.reasoning_scope())
+            self.reasoning.begin_turn()
+            self.usage_suspended = False
+            self.show_turn_settings = True
         self.running = True
+
+    def reasoning_scope(self):
+        return self.requested, self.turn_provider, self.turn_effort, self.turn_tier
 
     def observe(self, actual, source, expected=None):
         actual = model_id(actual)
@@ -116,7 +136,7 @@ class State:
         method, params = msg.get("method"), msg.get("params") or {}
         if not isinstance(params, dict):
             return
-        if method in ("thread/start", "thread/resume", "thread/fork", "account/read"):
+        if method in ("thread/start", "thread/resume", "thread/fork", "thread/rollback", "account/read"):
             rid = msg.get("id")
             if type(rid) in (str, int) and len(self.pending) < 128:
                 self.pending[rid] = (method, self.auth_epoch)
@@ -140,6 +160,8 @@ class State:
                 thread = self.thread(thread_data.get("id"))
                 if thread:
                     self.selected = thread.id
+                    if method != "thread/start":
+                        thread.reasoning.attach()
                     thread.settings(result)
                     self.health = "connected"
         method, params = msg.get("method"), msg.get("params") or {}
@@ -149,6 +171,7 @@ class State:
             self.auth_epoch += 1
             self.account = None
             self.limits = {}
+            self.reset_reasoning()
             return
         if method == "account/rateLimits/updated":
             # Streaming updates carry no account/turn id and can belong to an
@@ -172,11 +195,15 @@ class State:
             if params.get("turnId") == thread.turn_id:
                 thread.observe(params.get("toModel"), "model/rerouted", params.get("fromModel"))
         elif method == "thread/tokenUsage/updated":
+            if params.get("turnId") != thread.turn_id or not thread.running:
+                return
             usage = params.get("tokenUsage") or {}
             window = number(usage.get("modelContextWindow"))
             used = number((usage.get("last") or {}).get("totalTokens"))
             if window and used is not None:
                 thread.context = min(100, round(100 * used / window))
+            if not thread.usage_suspended:
+                thread.reasoning.observe(usage, thread.reasoning_scope())
 
     def log(self, record):
         """Only consume authenticated child-process tracing, never assistant text."""
@@ -218,6 +245,7 @@ class State:
             thread.sampling = True
             thread.requested = model_id(fields.get("model")) or thread.requested
             thread.observed = thread.source = thread.observed_at = None
+            thread.reasoning.activate(thread.reasoning_scope())
             return
         if match:
             expected = match[2] or fields.get("model")
@@ -234,7 +262,14 @@ class State:
         if clean != self.account:
             self.auth_epoch += 1
             self.limits = {}
+            self.reset_reasoning()
         self.account = clean
+
+    def reset_reasoning(self):
+        for thread in self.threads.values():
+            thread.reasoning.reset()
+            # A running response can still belong to the previous login.
+            thread.usage_suspended = thread.running
 
     def set_limits(self, limits):
         if not isinstance(limits, dict):
@@ -252,14 +287,19 @@ class State:
 
     def snapshot(self):
         thread = self.threads.get(self.selected)
+        thread_data = asdict(thread) if thread else None
+        if thread_data:
+            thread_data["reasoning"] = thread.reasoning.summary()
+            if thread.show_turn_settings:
+                thread_data.update(provider=thread.turn_provider, effort=thread.turn_effort, tier=thread.turn_tier)
         account = self.account
         # account/read is for the server's OpenAI account. It isn't evidence of the
         # identity billed by an arbitrary custom provider.
-        if thread and thread.provider != "openai":
+        if thread_data and thread_data["provider"] != "openai":
             account = None
         return {
             "schema": 1, "health": self.health, "updated_at": time.time(),
-            "thread": asdict(thread) if thread else None,
+            "thread": thread_data,
             "account": account if self.show_account else None, "account_hidden": not self.show_account,
             "limits": self.limits if account and time.time() - self.limits_at <= 60 else {},
         }
@@ -288,9 +328,17 @@ def render(snapshot, language="en", row=None):
     parts = [title + " " + route]
     if actual and not t.get("running"):
         parts[0] += " (上轮)" if zh else " (last turn)"
-    if t.get("effort"):
-        parts.append(t["effort"] + (" / " + t["tier"] if t.get("tier") else ""))
+    signal = t.get("reasoning") or {}
+    warning = alert_text(signal, zh)
+    if warning and not t.get("mismatch"):
+        parts[0] = warning + " | " + parts[0]
+        color = "alarm" if signal["alert"] == "suspect" else "unknown"
+    effort, tier = t.get("effort"), t.get("tier")
+    if effort:
+        parts.append(effort + (" / " + tier if tier else ""))
     model_parts = len(parts)
+    if t:
+        parts.append(usage_text(signal, zh))
     account = snapshot.get("account")
     if account:
         if account["type"] == "chatgpt":

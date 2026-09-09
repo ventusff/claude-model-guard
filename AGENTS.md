@@ -33,6 +33,8 @@ For Codex, run from `codex/model-guard/` with Python 3.11+, tmux and Codex 0.153
 
 Codex invariants: requested model is not observed evidence; absent headers stay unverified; metadata is bound to thread/turn; model/account text cannot become tmux format commands. The observer never reads auth files or writes Codex session records. Preserve stock CLI behavior for noninteractive/profile/remote invocations and preserve existing terminals during install/removal. Code changes belong in the source package, never the installed environment. Keep the Codex manifest, Python package and pyproject release versions aligned with the four Claude release locations below.
 
+Codex reasoning telemetry is a separate heuristic: exact 516 at high or greater effort produces a watch notice; at least three of five recent valid response observations produces a suspect alert. Higher 518n-2 values alone do not alert. Count responses, not repeated usage notifications; stale totals cannot reset the watermark. Bind statistics to model/provider/effort/tier/account, preserve in-flight settings, and distinguish fresh threads from attachments/accepted rollbacks. Strict route exit codes never incorporate a heuristic as model identity.
+
 Requirements: bash 4+, jq and curl; the recovery path also uses `flock` and `setsid`. There is no CI workflow — `tests/run.sh` on the machine is the bar. Hooks load at session start, so a change under `hooks/` or `scripts/` is only observed by a freshly started session, and the statusline change only after the installed copy is refreshed.
 
 ## Hard rules

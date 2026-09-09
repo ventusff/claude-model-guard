@@ -100,6 +100,7 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.s.snapshot()["account"]["email"], "b@example.com")
 
     def test_nullable_reasoning_setting_does_not_keep_old_effort(self):
+        self.event("turn/completed", turn={"id": "turn1"})
         self.event("thread/settings/updated", threadSettings={"effort": None})
         self.assertEqual(self.s.snapshot()["thread"]["effort"], "")
 
@@ -120,6 +121,7 @@ class StateTests(unittest.TestCase):
     def test_custom_provider_cannot_claim_openai_account(self):
         self.s.set_account({"type": "chatgpt", "email": "a@example.com", "planType": "pro"})
         self.event("thread/settings/updated", threadSettings={"modelProvider": "custom"})
+        self.event("turn/started", turn={"id": "turn2"})
         self.assertIsNone(self.s.snapshot()["account"])
 
     def test_metadata_cannot_execute_tmux_commands(self):

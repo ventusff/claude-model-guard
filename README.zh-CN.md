@@ -4,7 +4,7 @@
 
 # 🚨 model-guard
 
-**为 Claude Code 和 Codex CLI 持续显示模型与账号。Codex 版把服务端回报的模型路由放在首位。**
+**为 Claude Code 和 Codex CLI 持续显示模型与账号。Codex 版提示模型路由变化与可疑的推理用量。**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Made for Claude Code](https://img.shields.io/badge/made%20for-Claude%20Code-d97757)](https://claude.com/claude-code)
@@ -84,7 +84,7 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 
 ## Codex CLI
 
-**1.4 新增：**终端底部常驻两行状态栏，把请求模型与**服务端回报的模型路由**放在首位，随后显示账号、推理强度、上下文和用量。本 README 其他部分描述的 Claude Code 行为仍只针对 Claude Code。
+**1.5 新增：**常驻两行状态栏结合**服务端路由信息与被动推理异常检测**，接入社区的「恰好 516 token」信号，同时显示模型、账号、思考强度、上下文和额度。本 README 其他部分描述的 Claude Code 行为仍只针对 Claude Code。
 
 <img src="assets/codex.svg" alt="Codex 模型路由与账号状态栏的模拟示例" width="880">
 
@@ -93,18 +93,20 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 | 绿色「服务端回报」 | 最近一次服务端模型标识与请求一致 |
 | 红色「路由变化」 | 服务端回报的模型与请求不同，同时显示两者 |
 | 黄色「路由未验证」 | 这次请求没有可用的有效模型元数据 |
+| 黄色「516 命中」 | high 及以上强度下，本轮有响应回报了恰好 516 个推理 token |
+| 红色「疑似推理受限」 | high 及以上强度下，最近 5 次有效用量观测中至少 3 次命中 516；启发式告警 |
 | 红色「监测中断」 | 观察进程断开、读数过期或元数据无法解析 |
 
 模拟示例：
 
 ```text
  路由变化 gpt-6-astra → gpt-4o (上轮) | high
- you@example.com · pro | 上下文 18% | 5h 42% 已用 | 7d 21% 已用
+ 上次推理 516t · 516 3/12 | you@example.com · pro | 上下文 18%
 ```
 
-**这是对服务端披露信息的监测，不能独立证明底层权重。**服务商可能不回报、也可能改写元数据。Model Guard 不靠文风、自报身份或测试题猜测隐藏模型。`/model` 中选定的模型，以及缺少有效模型响应头的 `response.model`，都不能让横幅变绿。详见[路由调研与证据边界](codex/model-guard/ROUTING.zh-CN.md)。
+**即使暂时不知道底层的准确模型，也可以给出有用的异常提示。**Model Guard 直接观察实际响应的用量，不额外调用模型。`high`／`xhigh`／`max`／`ultra` 下命中 516 会保留提示至本轮结束，反复命中时在状态栏优先告警。计数覆盖最近 20 次有效响应用量观测，重复快照不会重复计数；更换模型、强度、服务档位或账号时重新统计。1034／1552／… 等更广泛的固定档位保留在 JSON 中供检查，不触发 516 告警。不自动重试或切换模型。
 
-本次专门核对了最近的 GPT-4o 路由案例和社区指纹工具，还没有找到可靠识别隐藏模型的办法：所审计的三轮指纹工具没有收录 GPT-4o，离线反例也会得到高概率的模型标签。本机实测没有证实降级。调研记录包含原始来源、源码版本、反例和实测；显示“未验证”不能算解决了剩余的隐藏路由问题。
+路由结论仍以有效服务端元数据为依据。服务商可能不回报或改写它；选择的模型、正文的 `response.model`、一次 516 命中，都不能证明具体由哪套权重生成。扩展后的[调研报告](codex/model-guard/ROUTING.zh-CN.md)包含 Reddit／GitHub 线索、本机用量审计、现成的 516 钩子、统计指纹、KBF 与续推理代理。统计异常检测可行，逐请求准确识别不披露的底层模型仍未解决。
 
 在本仓库中安装：
 
@@ -130,7 +132,7 @@ model-guard-codex doctor
 model-guard-codex remove
 ```
 
-在被监测终端以外运行 `check` 时，用 `--session 目录` 明确指定；程序不会猜测其他终端的会话。`probe` 可用 `-m 模型 -r 强度` 仅调整该请求，不能替已有会话证明路由。两者退出码均为：`0` 有效模型披露一致，`2` 不一致，`3` 未验证，`4` 监测不可用或探针失败。其 JSON 不含账号和对话文本；`status --json` 则包含横幅显示的账号。
+在被监测终端以外运行 `check` 时，用 `--session 目录` 明确指定；程序不会猜测其他终端的会话。`probe` 可用 `-m 模型 -r 强度` 仅调整该请求，不能替已有会话证明路由。两者退出码均为：`0` 有效模型披露一致，`2` 不一致，`3` 未验证，`4` 监测不可用或探针失败。独立的 JSON 字段 `reasoning.alert` 为 `none`、`watch` 或 `suspect`；路由披露一致时仍可能有推理告警。其 JSON 不含账号和对话文本；`status --json` 则包含横幅显示的账号。
 
 移除时删除受管理的 shell PATH 区块和启动器，保留配置、备份和分版本的 Python 环境，让已有会话正常结束。支持 bash 和 zsh 启动文件。`codex exec` 等非交互命令、管道输入、`resume`/`fork`、显式 `--remote`、`--profile` 以及 `--oss`/`--local-provider` 启动均转交官方 Codex；**resume/fork/profile/remote/本地模型启动没有路由横幅**，会打印提示。远端连接会改变恢复/派生会话的目录选择行为，且目前无法把 profile-v2 的服务商配置层安全地传给独立 app-server。Windows 可在 WSL 中运行。已经打开的终端和会话不会被强行改造。
 

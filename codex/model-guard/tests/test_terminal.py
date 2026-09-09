@@ -21,7 +21,13 @@ from test_integration import ResponsesFixture
 @unittest.skipUnless(os.environ.get("MODEL_GUARD_INTEGRATION") == "1", "requires stock Codex and tmux")
 class TerminalTests(unittest.TestCase):
     def test_footer_survives_tui_render_and_resize(self):
-        with tempfile.TemporaryDirectory(prefix="mg-pty-") as temp, ResponsesFixture("gpt-4o") as api:
+        self.exercise("gpt-4o", marker=b"ROUTE DIFF")
+
+    def test_516_warning_survives_tui_render_and_resize(self):
+        self.exercise(None, reasoning=[516], marker=b"516 WATCH")
+
+    def exercise(self, model, reasoning=None, marker=b"ROUTE DIFF"):
+        with tempfile.TemporaryDirectory(prefix="mg-pty-") as temp, ResponsesFixture(model, reasoning) as api:
             home = Path(temp)
             codex = home / "codex"
             codex.mkdir()
@@ -67,14 +73,16 @@ class TerminalTests(unittest.TestCase):
                         if any(text in screen.lower() for text in ("press enter", "continue", "trust this", "trust the")):
                             os.write(master, b"\r")
                         last_enter = time.monotonic()
-                    if b"ROUTE DIFF" in output and b"gpt-4o" in output and b"account unknown" in output:
+                    if marker in output and b"account unknown" in output:
                         break
-                if b"ROUTE DIFF" not in output:
+                if marker not in output:
                     screen = subprocess.check_output(["tmux", "-S", str(runtime / "tmux.sock"), "capture-pane", "-p"], text=True) if runtime else "no tmux runtime"
-                    self.fail("Footer did not report mismatch. Terminal:\n" + screen[-2000:])
+                    self.fail("Footer did not report the expected warning. Terminal:\n" + screen[-2000:])
                 self.assertIsNotNone(runtime)
                 snapshot = json.loads((runtime / "state.json").read_text())
-                self.assertEqual(snapshot["thread"]["observed"], "gpt-4o")
+                self.assertEqual(snapshot["thread"]["observed"], model)
+                if reasoning:
+                    self.assertEqual(snapshot["thread"]["reasoning"]["last_tokens"], 516)
                 # Resize while Codex owns the screen, then check the second footer row.
                 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 80, 0, 0))
                 os.killpg(process.pid, signal.SIGWINCH)
@@ -83,9 +91,9 @@ class TerminalTests(unittest.TestCase):
                 while time.monotonic() < deadline:
                     if select.select([master], [], [], 0.1)[0]:
                         resized.extend(os.read(master, 65536))
-                    if b"ROUTE DIFF" in resized and b"account unknown" in resized:
+                    if marker in resized and b"account unknown" in resized:
                         break
-                self.assertTrue(b"ROUTE DIFF" in resized and b"account unknown" in resized, "Both footer rows must survive resize to 80 columns")
+                self.assertTrue(marker in resized and b"account unknown" in resized, "Both footer rows must survive resize to 80 columns")
                 os.write(master, b"\x03")
                 time.sleep(0.2)
                 os.write(master, b"\x03")

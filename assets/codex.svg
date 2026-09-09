@@ -1,22 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="880" height="354" viewBox="0 0 880 354" role="img" aria-label="Synthetic examples of Codex Model Guard: unverified, server-reported match, and route difference">
-  <rect width="880" height="354" rx="16" fill="#0d1117"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="442" viewBox="0 0 880 442" role="img" aria-label="Synthetic examples of Codex Model Guard: unverified, server-reported match, route difference, and a heuristic 516 reasoning warning">
+  <rect width="880" height="442" rx="16" fill="#0d1117"/>
   <g font-family="ui-monospace, SFMono-Regular, Consolas, monospace">
     <text x="26" y="35" fill="#f0f6fc" font-size="20" font-weight="bold">MODEL GUARD / CODEX</text>
-    <text x="26" y="60" fill="#a9b3bd" font-size="13">Official CLI · persistent routing + account band · synthetic examples</text>
+    <text x="26" y="60" fill="#a9b3bd" font-size="13">Official CLI · routing + reasoning + account · synthetic examples</text>
     <rect x="20" y="80" width="840" height="74" rx="5" fill="#ffb300"/>
     <g fill="#000000" font-size="16">
       <text x="34" y="108" font-weight="bold">ROUTE UNVERIFIED gpt-6-astra → ? | high</text>
-      <text x="34" y="136">you@example.com · pro | ctx 18% | 5h 42% used</text>
+      <text x="34" y="136">last reasoning ? | you@example.com · pro | ctx 18%</text>
     </g>
     <rect x="20" y="168" width="840" height="74" rx="5" fill="#3fb950"/>
     <g fill="#000000" font-size="16">
       <text x="34" y="196" font-weight="bold">SERVER gpt-6-astra (last turn) | high</text>
-      <text x="34" y="224">you@example.com · pro | ctx 18% | 5h 42% used</text>
+      <text x="34" y="224">last reasoning 1200t · 516 0/5 | you@example.com · pro</text>
     </g>
     <rect x="20" y="256" width="840" height="74" rx="5" fill="#b00020"/>
     <g fill="#ffffff" font-size="16">
       <text x="34" y="284" font-weight="bold">ROUTE DIFF gpt-6-astra → gpt-4o (last turn) | high</text>
-      <text x="34" y="312">you@example.com · pro | ctx 18% | 5h 42% used</text>
+      <text x="34" y="312">last reasoning 0t · 516 0/5 | you@example.com · pro</text>
+    </g>
+    <rect x="20" y="344" width="840" height="74" rx="5" fill="#b00020"/>
+    <g fill="#ffffff" font-size="14">
+      <text x="34" y="372" font-weight="bold">REASONING SUSPECT · 516 3/5 | ROUTE UNVERIFIED gpt-6-astra → ?</text>
+      <text x="34" y="400">last reasoning 516t · 516 3/5 | you@example.com · pro</text>
     </g>
   </g>
 </svg>

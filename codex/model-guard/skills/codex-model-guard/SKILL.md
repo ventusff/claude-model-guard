@@ -1,9 +1,11 @@
 ---
 name: codex-model-guard
-description: Install, inspect, update or remove the Model Guard status band for Codex CLI, including server-reported model routing and account identity. Use for Model Guard setup and routing diagnostics; it does not identify undisclosed backend models.
+description: Install, inspect, update or remove the Model Guard status band for Codex CLI, including model routing, passive 516 reasoning anomalies and account identity. Use for Model Guard setup and routing diagnostics.
 ---
 
 Model Guard runs the official Codex CLI with a persistent terminal band. Plugin installation makes this skill available; the terminal launcher needs one setup step.
+
+The band also passively counts reasoning usage. At high/xhigh/max/ultra, exact 516 produces a watch notice; three of the last five measured responses produces a suspect warning. These are heuristic indicators of possible reasoning restriction, not proof of truncation or a particular replacement model. JSON exports include the separate `reasoning` object; strict routing exit codes do not incorporate the heuristic. Do not infer recovery from a correct answer or trigger automatic retries/model changes. Higher 518n-2 values are counted but do not trigger this alert alone.
 
 For setup or an update, run `python3 scripts/install.py` from this plugin's root (two directories above this skill). Use `--language zh` for Chinese or `--language en` for English. Requires Python 3.11+, tmux, and official Codex 0.153.4+. Install missing dependencies using the machine's existing package manager when authorized.
 
