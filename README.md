@@ -84,68 +84,40 @@ The last step is **interactive** — arrow keys, two questions, done. It copies 
 
 ## Codex CLI
 
-**New in 1.5:** the persistent two-row band combines **server-reported routing with passive reasoning anomaly detection**, including the community's exact-516 signal. It also shows your model, account, reasoning effort, context and quota. The Claude Code behavior described elsewhere in this README remains specific to Claude Code.
+**1.6 uses Codex's native status line.** Model, requested reasoning effort and account share the existing footer. Routing differences and repeated 516-token reasoning signals appear only when observed. Normal use has no extra terminal layer and no permanent warning banner.
 
-<img src="assets/codex.svg" alt="Synthetic examples of the Codex routing and account band" width="880">
+<img src="assets/codex.svg" alt="Illustrative native Codex footer and conditional routing warning" width="880">
 
-| Band | Codex meaning |
-|---|---|
-| Green `SERVER` | The most recent server model report matches the request |
-| Red `ROUTE DIFF` | A reported model differs from the request; the band names both |
-| Amber `ROUTE UNVERIFIED` | No usable effective-model metadata for this request |
-| Amber `516 WATCH` | A response in this turn reported exactly 516 reasoning tokens at high or greater effort |
-| Red `REASONING SUSPECT` | At least 3 of the last 5 measured responses hit 516 at high or greater effort; a heuristic warning |
-| Red `MONITOR LOST` | The observer is disconnected, stale or unable to parse metadata |
+Run `codex` or `cx` normally, including `resume` and `fork`. Native input handling, scrollback, paste, resizing, profiles and directory selection remain owned by Codex. Background title generation and agent threads cannot replace the visible conversation's model.
 
-Synthetic example:
+The footer says **selected** until live request metadata arrives; it then says **request**, using the model and effort pinned to that request. An attachment never guesses the settings of a request that started before it subscribed. A disclosed different model shows both names. At high or greater effort, at least three of the last five measured responses with exactly 516 reasoning tokens show a reasoning anomaly warning. Single hits and sample counts are available in **`/status`**. Statistics use unique response IDs and reset when the model, provider, effort, service tier or account changes.
 
-```text
- ROUTE DIFF gpt-6-astra → gpt-4o (last turn) | high
- last reasoning 516t · 516 3/12 | you@example.com · pro | ctx 18%
-```
+These are two distinct signals: effective model metadata records what the server disclosed; 516 is a community heuristic with no calibrated false-positive rate. Neither proves the underlying weights. Missing disclosure is explained in `/status` and does not turn the normal footer yellow. No inference requests, retries or model changes are triggered by passive monitoring. See the [routing research](codex/model-guard/ROUTING.md) for inspected Reddit/GitHub approaches and their limits.
 
-**A useful anomaly warning does not require knowing the exact backend model.** Model Guard watches real response usage without extra inference calls. At `high`/`xhigh`/`max`/`ultra`, an exact-516 hit is highlighted through the turn; repeated hits take priority in the band. Counts cover the last 20 measured responses, deduplicate repeated usage snapshots, and reset across model/effort/tier/account changes. The broader 1034/1552/… ladder is exported for inspection but does not trigger the 516 alert. No automatic retry or model change is performed.
-
-The routing verdict still compares effective server metadata. A provider can omit or rewrite it; neither the selected model, a body `response.model`, nor a 516 hit proves which weights answered. The expanded [research report](codex/model-guard/ROUTING.md) covers Reddit/GitHub findings, a local usage audit, working 516 hooks, statistical fingerprints, KBF and continuation proxies. Statistical detection is feasible; identifying a particular undisclosed backend for every request remains unresolved.
-
-Install from this checkout:
+After installing and enabling the Codex plugin from your personal marketplace, install its native runtime:
 
 ```sh
 python3 codex/model-guard/scripts/install.py --language en
-```
-
-Then open a **new terminal** and run `codex` normally. Requirements: Linux or macOS, Python 3.11+, tmux, official Codex CLI 0.153.4+. The Codex plugin bundle is [`codex/model-guard`](codex/model-guard); its `codex-model-guard` skill runs the same installer when loaded through a personal marketplace. Installation alone cannot add a custom native footer: current stock Codex only exposes built-in status items.
-
-The launcher creates its own tmux server and uses Codex's official local app-server protocol. It also works inside kitty, zellij and another tmux session; your multiplexer configuration and other panes are untouched. It uses the installed official executable, so `codex update` continues to update that executable. It does not compile or patch Codex, intercept HTTPS, change model/provider defaults, read login files, or write session history. The local protocol adapter forwards conversation data in memory and retains only allowlisted metadata in an owner-only temporary directory. It exits with the guarded session.
-
-Each terminal is bound to its own session and turn. Agent events cannot replace the parent's model. Evidence is reset for a new sampling request; a mismatch stays red for the rest of the turn, and completed-turn readings say `last turn`. No model strength ordering or automatic switching is inferred for Codex. Reasoning effort is the requested setting, not proof of hidden reasoning.
-
-Account identity comes from the same app-server's `account/read`, refreshed at most every 15 seconds while idle and when a turn begins. Custom providers display their provider name and unknown account identity. ChatGPT usage comes from `account/rateLimits/read`, at most once every 30 seconds per guarded session; readings older than 60 seconds are hidden. Account changes invalidate usage and outstanding reads. Unscoped streaming quota events cannot restore the previous account's usage.
-
-Settings are in `~/.local/share/model-guard-codex/config.json`: `language` (`en` or `zh`) and `show_account` (boolean). Set `MODEL_GUARD_CODEX_HOME` for a different installation directory, `MODEL_GUARD_CODEX_BIN` for an explicit official executable, or `MODEL_GUARD_RUNTIME_DIR` for a temporary-directory parent.
-
-```sh
-model-guard-codex check --json   # Strict check of this guarded terminal; no model request
-model-guard-codex probe --json   # One separate read-only request; consumes provider quota
-model-guard-codex status --json  # This guarded session, or your running sessions
 model-guard-codex doctor
-model-guard-codex remove
 ```
 
-`check` accepts `--session DIRECTORY` outside the guarded terminal; it never guesses another terminal's session. `probe` accepts `-m MODEL -r EFFORT` for that request only and does not verify an existing session. Both return `0` for matching effective-model disclosure, `2` for a mismatch, `3` for unverified routing, and `4` for unavailable monitoring or a failed probe. The separate JSON `reasoning.alert` field is `none`, `watch` or `suspect`; a routing match can coexist with a reasoning warning. Their JSON omits account identity and conversation text; `status --json` includes the account shown in the band.
+The prebuilt runtime supports **Linux x86_64, glibc 2.39+, Python 3.12+ and the official standalone Codex 0.153.4**. The installer verifies a release checksum, prepares a versioned package and atomically switches the existing `~/.local/bin/codex` symlink. Your next `codex` or `cx resume` invocation picks it up in the current shell. Existing sessions continue on their original executable.
 
-Removal deletes the managed shell PATH block and launchers, retaining settings, backups and versioned environments so existing sessions can finish. Bash, zsh and Fish startup files are supported. Fish uses a managed block in `config.fish` (respecting `XDG_CONFIG_HOME`), without changing persistent universal variables. `codex exec`, other noninteractive commands, piped input, `resume`/`fork`, explicit `--remote`, `--profile` and `--oss`/`--local-provider` launches delegate to stock Codex; **resume/fork/profile/remote/local-model launches have no routing band** and print a notice. The remote connection changes resume/fork directory selection, and profile-v2 provider configuration cannot currently be passed safely to a separate app-server. Windows users can use WSL. Existing terminals/sessions are not retrofitted.
+This is a disclosed **custom build of official Codex**, pinned to one source commit, with reviewable patches and a [build recipe](codex/model-guard/native/README.md). Stock Codex does not currently expose a plugin footer renderer. Model Guard adds metadata and native rendering inside that source; it adds no tmux server, terminal proxy, provider proxy or transport logging. Account and quota handling use Codex's existing state. Model/provider defaults and login files are not changed. The supplied package includes the official code-mode host and sandbox helpers from the same release.
 
-Validate the Codex code from its plugin directory:
+Native builds must be updated together with the plugin. Replacing the Codex entry through a separate official installation can remove the native extension; `doctor` detects that condition. An explicit remote app-server must run the same metadata extension for complete routing details; connection and CLI semantics remain native.
+
+Display preferences live in `~/.local/share/model-guard-codex/config.json`: `language` (`en` or `zh`) and `show_account` (boolean). `MODEL_GUARD_CODEX_HOME` selects another installation root. Disable the plugin in Codex to disable its display.
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install --require-hashes -r requirements.lock
-.venv/bin/pip install --no-deps -e .
-PYTHONPATH=. MODEL_GUARD_INTEGRATION=1 .venv/bin/python -m unittest discover -s tests -v
+model-guard-codex probe --json   # A separate read-only request; consumes provider quota
+model-guard-codex doctor        # Verify the installed native executable and active entry
+model-guard-codex remove        # Restore the original official executable symlink
 ```
 
-The integration suite uses the real official Codex, local HTTP/SSE and WebSocket fixtures, and a real tmux/PTY. It does not consume model tokens or use your login.
+Live session details are accessed inside Codex with `/status`; the old external `status` and `check` commands now direct you there. `probe` accepts `-m MODEL -r EFFORT` for that request only. Its exit codes are `0` for matching effective-model disclosure, `2` for a difference, `3` for missing disclosure, and `4` for an unavailable/failed probe. JSON omits account identity and conversation text. A separate probe cannot certify an existing conversation.
+
+Removal preserves running sessions, packages and preferences. Legacy managed shell blocks are removed during migration; no new shell PATH blocks are needed. Validation uses isolated Codex homes, local HTTP/SSE and WebSocket fixtures, Rust state/layout tests, and real native PTYs. See the build recipe for commands.
 
 ## How "downgraded" is decided
 

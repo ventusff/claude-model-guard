@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-model-guard"
-version = "1.5.1"
-description = "A persistent Codex CLI band for server-reported model routing and account identity"
-requires-python = ">=3.11"
+version = "1.6.0"
+description = "Native Codex routing evidence, reasoning anomalies and account status"
+requires-python = ">=3.12"
 dependencies = ["websockets==17.1"]
 license = "MIT"
 

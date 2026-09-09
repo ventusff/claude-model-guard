@@ -2,7 +2,7 @@ import unittest
 
 from model_guard.check import verdict
 from model_guard.reasoning import Reasoning
-from model_guard.state import State, render, tmux_band
+from model_guard.state import State
 
 
 def usage(tokens, total, size=4000):
@@ -126,11 +126,7 @@ class ReasoningStateTests(unittest.TestCase):
         self.assertIsNone(result["server_reported"])
         self.assertNotIn("private", str(result))
         self.assertNotIn("scope", result["reasoning"])
-        for language in ("en", "zh"):
-            with self.subTest(language=language):
-                band, _ = tmux_band(self.state.snapshot(), language=language, width=50)
-                self.assertIn("516 3/5", band)
-                self.assertEqual(render(self.state.snapshot(), language)[0], "alarm")
+        self.assertEqual((result["reasoning"]["recent_516"], result["reasoning"]["recent_samples"]), (3, 5))
 
     def test_old_turn_and_child_usage_cannot_contaminate_parent(self):
         self.state.server({"method": "thread/tokenUsage/updated", "params": {"threadId": "child", "turnId": "turn", "tokenUsage": usage(516, 4000)}})
@@ -156,7 +152,7 @@ class ReasoningStateTests(unittest.TestCase):
         self.count(index=2)
         self.assertEqual(self.thread.reasoning.summary()["effort"], "high")
         self.assertEqual(self.thread.reasoning.summary()["samples"], 2)
-        self.assertIn("| high", render(self.state.snapshot())[1])
+        self.assertEqual(self.state.snapshot()["thread"]["effort"], "high")
         self.thread.begin_turn("next")
         self.assertEqual(self.thread.reasoning.summary()["samples"], 0)
 
@@ -185,8 +181,8 @@ class ReasoningStateTests(unittest.TestCase):
         self.event("thread/settings/updated", threadSettings={"effort": "low", "serviceTier": "fast"})
         self.event("turn/completed", turn={"id": "turn"})
         self.assertEqual(self.state.snapshot()["thread"]["effort"], "high")
-        self.assertIn("| high", render(self.state.snapshot())[1])
-        self.assertNotIn("low / fast", render(self.state.snapshot())[1])
+        self.assertEqual(self.state.snapshot()["thread"]["effort"], "high")
+        self.assertNotEqual(self.state.snapshot()["thread"]["tier"], "fast")
         self.event("thread/settings/updated", threadSettings={"effort": "low", "serviceTier": "fast"})
         self.assertEqual(self.state.snapshot()["thread"]["effort"], "low")
         self.assertEqual(self.thread.reasoning.summary()["samples"], 0)
@@ -212,12 +208,9 @@ class ReasoningStateTests(unittest.TestCase):
         self.assertEqual(self.thread.reasoning.summary()["samples"], 1)
         self.assertEqual(self.thread.reasoning.summary()["exact_516"], 0)
 
-    def test_disclosed_mismatch_has_visual_priority(self):
+    def test_disclosed_mismatch_keeps_strict_exit_code(self):
         self.count()
         self.thread.observe("gpt-4o", "model/rerouted")
-        color, content = render(self.state.snapshot())
-        self.assertEqual(color, "alarm")
-        self.assertTrue(content.startswith("ROUTE DIFF"))
         self.assertEqual(verdict(self.state.snapshot())["exit_code"], 2)
 
     def test_shared_export_filters_unknown_reasoning_fields(self):

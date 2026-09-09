@@ -49,7 +49,7 @@
 # right after the `input=$(cat ...)` line to inspect the full stdin payload
 # (model / effort / thinking / context_window / rate_limits / fast_mode / ...).
 
-MG_VERSION="1.5.1"
+MG_VERSION="1.6.0"
 set -u
 input=$(cat 2>/dev/null || true)
 

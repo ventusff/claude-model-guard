@@ -1,7 +1,7 @@
 {
   "name": "model-guard",
-  "version": "1.5.1",
-  "description": "Persistent Codex CLI band for model routing, passive 516 reasoning anomalies, account identity and usage.",
+  "version": "1.6.0",
+  "description": "Native Codex status line for model routing, reasoning anomalies and account identity.",
   "author": {
     "name": "ventusff",
     "url": "https://github.com/ventusff"
@@ -13,10 +13,12 @@
   "interface": {
     "displayName": "Model Guard",
     "shortDescription": "Watch model routing, 516 reasoning anomalies and your Codex account.",
-    "longDescription": "A persistent terminal band using the official Codex CLI. Displays model routing, account and passive reasoning-token signals. Repeated 516 hits produce a heuristic warning; missing model disclosure stays unverified. Includes reversible setup and diagnostics.",
+    "longDescription": "A native Codex extension with a quiet footer and conditional routing or repeated 516 reasoning alerts. Includes reversible installation, source patches and diagnostics. Missing disclosure is explained in /status.",
     "developerName": "ventusff",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": ["Set up Model Guard for my Codex CLI."]
+    "defaultPrompt": [
+      "Set up Model Guard for my Codex CLI."
+    ]
   }
 }

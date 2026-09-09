@@ -29,7 +29,7 @@ def verdict(snapshot, scope="current_session"):
     health = snapshot.get("health")
     if health != "connected":
         status, reason = "unavailable", "observer_not_connected"
-    elif not requested or not observed or source not in ("server-model-log", "model/rerouted"):
+    elif not requested or not observed or source not in ("server-model-log", "model/rerouted", "model/routing/updated"):
         status, reason = "unverified", "effective_model_not_disclosed"
     elif mismatch or requested.casefold() != observed.casefold():
         status, reason = "reported_mismatch", "server_reported_different_model"

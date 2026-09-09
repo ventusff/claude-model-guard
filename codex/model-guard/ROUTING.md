@@ -26,22 +26,20 @@ That project's controls also matter: 1034/1552/2070/… occurred in correct runs
 
 ### Model Guard's rule
 
-The native app-server's `thread/tokenUsage/updated` notification includes thread, turn, cumulative usage and the last response's reasoning count. Model Guard observes this existing stream; no periodic challenge requests are added. The [release's protocol](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/app-server-protocol/src/protocol/v2/thread.rs) and [core usage handling](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/session/mod.rs) also explain why repeated snapshots and context recomputations must not be counted as new responses.
+The native UI consumes `rawResponse/completed`, which supplies a response ID and its reasoning usage. Unique response IDs avoid counting repeated usage snapshots or context recomputation as new responses. The explicit standalone probe also supports stock Codex's `thread/tokenUsage/updated` stream, using conservative cumulative-usage checks.
 
-| Observation | Display / treatment |
+| Observation | Native display / treatment |
 |---|---|
-| Completed response reports a valid reasoning count | Show `last reasoning Nt`, including a reported zero |
-| Exact 516 under `high`, `xhigh`, `max` or `ultra` | Amber `516 WATCH`, retained for the turn even if a later response has another count |
-| At least 3 exact-516 hits among the last 5 valid response observations at those efforts | Red `REASONING SUSPECT`, with the numerator and denominator |
-| Exact 516 at lower or unknown effort | Show and count it; no automatic 516 warning |
-| Higher `518n − 2` values | Count as ladder hits in JSON; no 516 alert from these alone |
-| Missing or invalid reasoning field | Show `?`; never synthesize 516 or infer a model |
+| Valid reasoning count, including zero | Available in `/status` |
+| Single exact 516 at high or greater effort | Retained in diagnostics; normal footer stays quiet |
+| At least 3 exact-516 hits in the last 5 valid responses at those efforts | Amber reasoning anomaly warning, expressed as a sentence |
+| Exact 516 at lower or unknown effort | Counted without a warning |
+| Higher `518n − 2` values | No native warning; the standalone probe exports ladder counts |
+| Missing or invalid usage | No synthesized count; no placeholder in the normal footer |
 
-The 3-of-5 threshold is a product heuristic. It has no claimed false-positive probability and is not evidence that three answers were wrong. `samples` counts up to 20 valid response observations, including zero; `recent_samples` counts up to five. These are model responses, including tool rounds, rather than user turns. `turn_516` retains intermediate hits, which should not be confused with the count of the final answer.
+The 3-of-5 threshold has no claimed false-positive probability and is not evidence that three answers were wrong. Statistics cover up to 20 valid responses, including tool rounds, and reset across model/provider/effort/tier/account changes. Responses in flight during an observed account change are quarantined until the next turn. This is a diagnostic signal, not a billing ledger.
 
-The observer accepts a sample only when cumulative token usage advances by `last.totalTokens`. Repeated snapshots do not advance the count; an initial historical snapshot establishes a watermark. Stale lower totals are ignored; accepted rollback operations reestablish the watermark. Thread/turn mismatches are rejected. Model, provider, requested effort and service tier define the measurement bucket; account changes clear it and quarantine an in-flight response until a new turn. Consequently this conservative counter can omit an observation after interrupted coverage. It is not a billing ledger.
-
-`check --json` exports these fields under `reasoning`, with `evidence: "heuristic"`. Its existing route exit codes retain their meaning: a disclosed match may coexist with `reasoning.alert: "suspect"`. A monitor failure or disclosed mismatch takes visual priority. No prompt injection, forced continuation, model selection or retry is triggered by this feature.
+The explicit `probe --json` exports `reasoning` with `evidence: "heuristic"`; its route exit code remains independent. A disclosed match may coexist with `reasoning.alert: "suspect"`. A disclosed difference takes visual priority in the native footer. No prompt injection, forced continuation, model selection or retry is triggered.
 
 ### Local reproduction
 
@@ -141,10 +139,10 @@ The separate research paper [One Token Is Enough](https://arxiv.org/abs/2607.102
 | [sh-ai-x/codex-statusline](https://github.com/sh-ai-x/codex-statusline) | Configure stock model/context/usage footer items | A configured model is not backend evidence; no arbitrary command renderer |
 | [mullller/codex-hud](https://github.com/mullller/codex-hud) | Use tmux to keep a HUD visible around stock Codex | Latest-session-file selection is insufficient for strict per-terminal routing attribution |
 | [brandonwie/codex-hud](https://github.com/brandonwie/codex-hud) | Optional patched native footer and version checks | Maintaining a patched binary ties upgrades to custom runtime builds |
-| [Every Code](https://github.com/just-every/code) | Community Codex fork; its author linked automatic route detection in #11189 | Replacing the user's Codex distribution would expand this plugin's maintenance scope |
+| [Every Code](https://github.com/just-every/code) | Community Codex fork; its author linked automatic route detection in #11189 | A full independent fork is broader than the small pinned native extension used here |
 | Capture full SSE/WS TRACE and inspect model fields | Useful for reproducing old reports | Can persist prompts and tool outputs; `response.model` is not the current client's effective-model authority |
 
-The selected design uses tmux for display and official local app-server messages for session identity, without depending on a Codex source fork or choosing whichever session file was touched most recently. No source code was copied from these community projects.
+Version 1.6 adopts a pinned native Codex source extension. The earlier tmux design was rejected after it altered mouse-wheel behavior and bypassed resume/fork. Native rendering removes both failure mechanisms. The maintenance cost is explicit: source pins, reviewable patches, matching helper binaries and release checksums. No source code was copied from these community projects.
 
 Every Code was additionally inspected at `07533447f713d39763047543cc19e1015a3a6a1e`: its [stream parser](https://github.com/just-every/code/blob/07533447f713d39763047543cc19e1015a3a6a1e/code-rs/core/src/client.rs) reads `response.created.response.model`, and its [comparison](https://github.com/just-every/code/blob/07533447f713d39763047543cc19e1015a3a6a1e/code-rs/core/src/codex/streaming.rs) accepts any nonempty hyphen suffix of the requested model. This can conceal a meaningfully different suffixed identifier. We did not adopt that equality rule.
 
@@ -162,47 +160,45 @@ For routing, these are the relevant source boundaries:
 
 The choice of effective headers is deliberate: official [PR #12061](https://github.com/openai/codex/pull/12061), merged February 18, removed `response.model` checks to reduce false positives and use the correct model slug. Merely restoring that old check would not solve routing verification.
 
-These findings are specific to the inspected release. Later versions may change log targets or protocol details. Unknown/missing fields must reduce the display to unverified or monitor-lost; they must not be filled from the selected model or an older turn.
+These findings are specific to the inspected release. Later versions may change log targets or protocol details. Unknown/missing fields must remain absent in diagnostics; they must not be filled from the selected model or an older turn, or turned into a permanent warning banner.
 
-## Runtime design
+## Runtime design (1.6)
 
 ```text
 your terminal
-  └─ isolated tmux server (two footer rows)
-       ├─ official Codex TUI
-       │    ↕ private Unix WebSocket, JSON-RPC
-       ├─ Model Guard adapter
-       │    ↕ stdio, JSON-RPC
-       └─ official Codex app-server → original provider, original TLS/auth
+  └─ native Codex TUI and its normal app-server
+       ├─ existing status line: selected/requested model, effort, account
+       ├─ conditional routing/reasoning warning
+       └─ original provider, TLS, authentication and request path
 ```
 
-Only the original app-server connects to the model provider. The adapter does not intercept HTTPS, handle authorization headers or read `auth.json`. The Unix socket lives in a randomly named owner-only directory. Helpers use Python isolated mode so a workspace cannot shadow the installed package. No additional TCP listener is created by Model Guard.
+The native source extension emits `model/routing/updated` with thread, turn and sampling-request IDs, the actual requested model/provider/effort/tier, and an optional effective server model. It consumes the transport's existing `ServerModel` events; it never elevates body `response.model` to identity evidence. Missing disclosure remains missing. New sampling requests clear a positive disclosure; a mismatch is latched through the turn. Completed-turn warnings say `last turn`.
 
-The adapter forwards requests, notifications and server-initiated tool requests. Its additional operations are read-only `account/read` and, for ChatGPT accounts, `account/rateLimits/read`. Requests are correlated by id and authentication epoch; delayed reads and unscoped streaming quota updates cannot repopulate old account usage after an observed login change.
+Each widget consumes only its own visible thread. Hidden `threadSource=system` title generation and child threads cannot replace the model. Replay is excluded from live observations. Reasoning usage comes from `rawResponse/completed`, deduplicated by response ID, and is scoped to model/provider/effort/tier/account. Account identity uses Codex's native state. There is no extra account polling, live protocol adapter, state-file scraping, provider proxy or transport logging.
 
-Structured stderr is consumed in memory with the filter `off,codex_core::session=info,codex_core::session::turn=trace`. The core turn TRACE scope supplies thread/turn/model span identifiers, while transport TRACE remains disabled. Only exact model-report records and sampling-boundary metadata enter state. Prompts, tool results, credentials, complete log lines and arbitrary response objects are not written to the plugin's state files.
+Normal display reuses the existing footer without adding a row. A disclosed different model adds a red warning; at high or greater effort, at least three of five recent measured responses with exactly 516 reasoning tokens add an amber heuristic warning. A single hit does not change the default interface. `/status` provides full-sentence counts and evidence boundaries. The heuristic threshold is a product policy, not a calibrated probability of routing or truncation.
 
-The display is pinned to the TUI-selected thread. Child-thread events cannot take focus. A new sampling request clears positive confirmation; a mismatch remains visible until the turn finishes, and idle evidence is labeled as the last turn. Model selection for a future turn does not relabel an in-flight request. Heartbeats older than five seconds render red.
+`resume`, `fork`, profiles, local providers and native remote connections follow Codex's original CLI, loader and directory semantics. An explicit remote server needs the metadata extension to disclose the complete request observations. Native terminal event handling is unchanged. Installation atomically switches the existing executable symlink; it does not insert shell PATH blocks. Source, schema and build details are in [native/README.md](native/README.md).
 
-Resume/fork, explicit remote-server, profile-v2 and OSS/local-provider invocations delegate to stock Codex with a visible notice. Remote-workspace semantics otherwise change resume/fork directory selection, and the separate official app-server does not accept the TUI's profile-v2 loader flag. Noninteractive commands delegate unchanged.
+## Standalone diagnostics
 
-## Strict standalone checks
+`/status` inside the conversation shows live observations. The old external `status` and `check` commands now direct callers to this native entry.
 
-`model-guard-codex check --json` checks this terminal's guarded session without making an inference request. Outside a guarded session, pass its runtime directory with `--session`; the command does not guess another terminal's session. `model-guard-codex probe --json` makes one separate ephemeral, read-only request using the official app-server's own authentication and the current workspace configuration. It consumes provider quota and does not certify an existing session. Optional `-m MODEL -r EFFORT` applies only to the probe.
+`model-guard-codex probe --json` makes one separate ephemeral read-only request using the official app-server's own authentication and current workspace configuration. It consumes provider quota and cannot certify an existing session. Optional `-m MODEL -r EFFORT` applies only to the probe. Its private stdio/Unix-WebSocket adapter is used solely for this explicit diagnostic, never around the interactive TUI.
 
-Both commands return `0` only for matching effective model disclosure, `2` for a disclosed mismatch, `3` for unverified routing, and `4` for an unavailable observer or failed probe. JSON exports omit account identifiers and conversation text. `weights_verified` is always false: even matching provider metadata is not independent verification of weights.
+The probe returns `0` for matching effective-model disclosure, `2` for a disclosed difference, `3` for missing disclosure, and `4` for an unavailable/failed probe. JSON omits account identifiers and conversation text. `weights_verified` is always false: matching provider metadata is not independent verification of weights.
 
 ## Validation
 
-The suite drives the installed official binary against local Responses fixtures with no real login. It covers matching and mismatching effective model headers, metadata-free replies whose `response.model` deliberately claims GPT-4o, HTTP/SSE and WebSocket transport, per-thread/turn attribution, account changes, terminal-format injection, observer heartbeat expiry, and real tmux/TUI rendering with a resize to 80 columns.
+Regression tests use isolated Codex homes and local Responses fixtures without a login. They cover headers and WebSocket metadata, metadata-free replies whose body deliberately claims GPT-4o, visible-thread attribution, account/settings boundaries, duplicate response IDs, native layout snapshots and real PTY startup/resume/fork/paste/resize. Source build checks and limitations are recorded in the native build documentation.
 
-The GPT-4o replies in these tests are explicitly **synthetic fixtures**. Passing the tests proves that the integration detects a disclosed mismatch; it is not evidence that OpenAI has routed this machine's traffic to GPT-4o.
+GPT-4o replies in these tests are **synthetic fixtures**. The tests validate detection of disclosed differences; they do not establish that OpenAI routed this machine's traffic to GPT-4o.
 
 ## Live check on the development machine
 
 A minimal real-account request on nomad-u selected `gpt-6-astra`. The adapter received account identity and quota data but no effective server-model report, so the route remained unverified. No downgrade was established. Account identifiers and tokens are deliberately omitted from this public record.
 
-An additional default WebSocket probe confirmed that neither handshake model metadata nor a core effective-model event was present. A separate diagnostic using the official app-server with an invocation-only OpenAI provider alias and WebSockets disabled returned SSE `response.model=gpt-6-astra`, with no effective model report. The diagnostic did not change the user's provider/model configuration files. Raw transport data was parsed in memory; only allowlisted results were retained. The normal launcher continues to use the original provider and transport.
+An additional default WebSocket probe confirmed that neither handshake model metadata nor a core effective-model event was present. A separate diagnostic using the official app-server with an invocation-only OpenAI provider alias and WebSockets disabled returned SSE `response.model=gpt-6-astra`, with no effective model report. The diagnostic did not change the user's provider/model configuration files. Raw transport data was parsed in memory; only allowlisted results were retained. The native runtime continues to use the original provider and transport.
 
 ## Principal research sources
 

@@ -1,0 +1,68 @@
+{
+  "date_utc": "2026-09-09",
+  "build_host": "Ubuntu 24.04 x86_64 (fornax-u)",
+  "rust_version": "1.95.0",
+  "upstream_commit": "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a",
+  "final_targeted_rust": {
+    "passed": 316,
+    "core_routing_cases": 5,
+    "native_tui_cases": 13,
+    "app_server_protocol_cases": 298
+  },
+  "final_native_tui_vs_pristine": {
+    "native_guard_passed": 13,
+    "native_passed": 4073,
+    "native_failed": 28,
+    "native_run": 4101,
+    "native_skipped": 6,
+    "baseline_passed": 4060,
+    "baseline_failed": 28,
+    "baseline_run": 4088,
+    "baseline_skipped": 6,
+    "native_only_failures": [],
+    "baseline_only_failures": []
+  },
+  "broader_affected_crates": {
+    "stage": "Before the final active-attachment display refinement; the final TUI is checked separately above.",
+    "native_passed": 10565,
+    "native_failed": 286,
+    "native_run": 10851,
+    "baseline_passed": 10548,
+    "baseline_failed": 286,
+    "baseline_run": 10834,
+    "skipped_each": 18,
+    "changed_failed": 286,
+    "changed_only": [],
+    "baseline_only": []
+  },
+  "full_workspace": {
+    "status": "blocked_by_upstream_asset",
+    "asset": "https://github.com/denoland/rusty_v8/releases/download/v150.4.0/librusty_v8_ptrcomp_sandbox_release_x86_64-unknown-linux-gnu.a.gz",
+    "result": "HTTP 404; the tag exists but this asset is absent. Excluding only codex-code-mode-host does not remove every dependent crate."
+  },
+  "baseline_limitations": [
+    "Host restrictions prevent creating user namespaces for several stock sandbox integration fixtures.",
+    "The official source tag has release-version snapshot mismatches. Those snapshots were not rewritten to claim a green suite."
+  ],
+  "final_package_python": {
+    "passed": 68,
+    "skipped": 0,
+    "tests": "Installer and state units; official app-server SSE/WebSocket fixtures; real PTY new/resume/fork/Fish cx resume/paste/resize; stock terminal-mode and scrollback parity."
+  },
+  "claude": {
+    "passed": 90,
+    "failed": 0
+  },
+  "source_package": {
+    "fresh_tag_checkout_verified": true,
+    "patch_files_match_tested_build_source": 45,
+    "external_cargo_dependencies_changed": false,
+    "official_helpers_checksum_verified": true
+  },
+  "review": {
+    "model": "gpt-6-astra",
+    "reasoning_effort": "high",
+    "sandbox": "read-only",
+    "scope": "Final request normalization; visible-thread lifecycle and replay; installer rollback and symlink/concurrent-edit preservation. Findings were fixed and covered by regression tests."
+  }
+}

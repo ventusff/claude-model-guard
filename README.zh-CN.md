@@ -84,68 +84,40 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 
 ## Codex CLI
 
-**1.5 新增：**常驻两行状态栏结合**服务端路由信息与被动推理异常检测**，接入社区的「恰好 516 token」信号，同时显示模型、账号、思考强度、上下文和额度。本 README 其他部分描述的 Claude Code 行为仍只针对 Claude Code。
+**1.6 直接使用 Codex 原生状态栏。** 模型、请求的思考强度和账号合并在原有页脚；检测到路由差异或反复出现 516 推理 token 时才展开提示。正常使用没有额外终端层，也没有常驻警告横幅。
 
-<img src="assets/codex.svg" alt="Codex 模型路由与账号状态栏的模拟示例" width="880">
+<img src="assets/codex.svg" alt="原生 Codex 页脚及有异常时才展开的路由提示示意图" width="880">
 
-| 横幅 | Codex 中的含义 |
-|---|---|
-| 绿色「服务端回报」 | 最近一次服务端模型标识与请求一致 |
-| 红色「路由变化」 | 服务端回报的模型与请求不同，同时显示两者 |
-| 黄色「路由未验证」 | 这次请求没有可用的有效模型元数据 |
-| 黄色「516 命中」 | high 及以上强度下，本轮有响应回报了恰好 516 个推理 token |
-| 红色「疑似推理受限」 | high 及以上强度下，最近 5 次有效用量观测中至少 3 次命中 516；启发式告警 |
-| 红色「监测中断」 | 观察进程断开、读数过期或元数据无法解析 |
+照常使用 `codex` 或 `cx`，包括 `resume` 和 `fork`。输入、历史滚动、粘贴、窗口缩放、profile 和目录选择都由 Codex 原生处理。后台标题生成和子代理不会覆盖当前对话显示的模型。
 
-模拟示例：
+收到实时请求元数据前显示**已选**模型；收到后显示**请求**模型和该次请求固定的思考强度。恢复正在执行的会话时，不会猜测连接前已开始请求的设置。服务端披露不同模型时同时显示两个名字。high 及以上强度下，最近 5 次有效响应中至少 3 次恰好用了 516 个推理 token，才显示推理异常提示。单次命中和详细统计放在 **`/status`**。统计按唯一响应 ID 去重；更换模型、服务商、强度、服务档位或账号时重新开始。
 
-```text
- 路由变化 gpt-6-astra → gpt-4o (上轮) | high
- 上次推理 516t · 516 3/12 | you@example.com · pro | 上下文 18%
-```
+两种信号含义不同：有效模型标识记录服务端披露；516 是尚未标定误报率的社区启发式信号。两者都不能证明底层权重。缺少披露的情况在 `/status` 解释，不让正常页脚一直变黄。被动监测不额外调用模型，不自动重试或切换模型。已检查的 Reddit／GitHub 方案及边界见[路由调研](codex/model-guard/ROUTING.zh-CN.md)。
 
-**即使暂时不知道底层的准确模型，也可以给出有用的异常提示。**Model Guard 直接观察实际响应的用量，不额外调用模型。`high`／`xhigh`／`max`／`ultra` 下命中 516 会保留提示至本轮结束，反复命中时在状态栏优先告警。计数覆盖最近 20 次有效响应用量观测，重复快照不会重复计数；更换模型、强度、服务档位或账号时重新统计。1034／1552／… 等更广泛的固定档位保留在 JSON 中供检查，不触发 516 告警。不自动重试或切换模型。
-
-路由结论仍以有效服务端元数据为依据。服务商可能不回报或改写它；选择的模型、正文的 `response.model`、一次 516 命中，都不能证明具体由哪套权重生成。扩展后的[调研报告](codex/model-guard/ROUTING.zh-CN.md)包含 Reddit／GitHub 线索、本机用量审计、现成的 516 钩子、统计指纹、KBF 与续推理代理。统计异常检测可行，逐请求准确识别不披露的底层模型仍未解决。
-
-在本仓库中安装：
+通过个人市场安装并启用 Codex 插件后，安装其原生运行时：
 
 ```sh
 python3 codex/model-guard/scripts/install.py --language zh
-```
-
-随后打开**新终端**，照常运行 `codex`。依赖：Linux 或 macOS、Python 3.11+、tmux、官方 Codex CLI 0.153.4+。Codex 插件包位于 [`codex/model-guard`](codex/model-guard)；通过个人市场加载后，`codex-model-guard` skill 会执行同一个安装器。当前官方 Codex 状态栏只提供内置项目，单独安装插件不能注册自定义原生横幅。
-
-启动器创建专属 tmux 服务，通过官方的本机 app-server 协议连接 Codex。在 kitty、zellij 和已有 tmux 会话中也可使用，不改原有复用器配置和其他面板。它调用已安装的官方可执行文件，因此 `codex update` 仍照常更新官方版本。不编译或修改 Codex，不拦截 HTTPS，不改默认模型或服务商配置，不读取登录文件，也不写入会话历史。本机协议适配器只在内存中转发对话数据，仅把明确允许的元数据保存在当前用户私有的临时目录中，随被监测会话退出。
-
-每个终端独立绑定自己的会话和轮次，子代理事件不会覆盖父会话的模型。每次模型采样都会重置验证信息；本轮一旦发现不一致，红色告警会保留到轮次结束，结束后的读数标为「上轮」。Codex 版不猜模型强弱排序、不自动切换模型。推理强度是请求设置，不能证明服务端内部实际用了多少推理。
-
-账号身份来自同一个 app-server 的 `account/read`，空闲时最多每 15 秒刷新一次，开始新轮次时也会刷新。自定义服务商显示名称及「账号未知」。ChatGPT 用量来自 `account/rateLimits/read`，每个被监测会话最多每 30 秒查询一次；超过 60 秒的读数不显示。换号时清除用量并使旧查询失效，不接受缺少账号标识的流式限额事件来回填旧账号的读数。
-
-配置位于 `~/.local/share/model-guard-codex/config.json`：`language`（`en` 或 `zh`）和 `show_account`（布尔值）。`MODEL_GUARD_CODEX_HOME` 可指定安装目录，`MODEL_GUARD_CODEX_BIN` 可指定官方可执行文件，`MODEL_GUARD_RUNTIME_DIR` 可指定临时目录的父目录。
-
-```sh
-model-guard-codex check --json   # 严格检查当前被监测终端，不额外请求模型
-model-guard-codex probe --json   # 发起一个单独的只读探针，会消耗服务商用量
-model-guard-codex status --json  # 当前被监测会话，或当前用户的运行中会话列表
 model-guard-codex doctor
-model-guard-codex remove
 ```
 
-在被监测终端以外运行 `check` 时，用 `--session 目录` 明确指定；程序不会猜测其他终端的会话。`probe` 可用 `-m 模型 -r 强度` 仅调整该请求，不能替已有会话证明路由。两者退出码均为：`0` 有效模型披露一致，`2` 不一致，`3` 未验证，`4` 监测不可用或探针失败。独立的 JSON 字段 `reasoning.alert` 为 `none`、`watch` 或 `suspect`；路由披露一致时仍可能有推理告警。其 JSON 不含账号和对话文本；`status --json` 则包含横幅显示的账号。
+预编译运行时支持 **Linux x86_64、glibc 2.39+、Python 3.12+，以及官方独立安装版 Codex 0.153.4**。安装器校验发布包、准备独立版本目录，再原子切换现有的 `~/.local/bin/codex` 软链接。在当前 shell 下一次执行 `codex` 或 `cx resume` 即可使用；已经运行的会话继续使用原来的可执行文件。
 
-移除时删除受管理的 shell PATH 区块和启动器，保留配置、备份和分版本的 Python 环境，让已有会话正常结束。支持 bash、zsh 和 Fish 启动文件。Fish 使用 `config.fish` 中的受管理区块（遵循 `XDG_CONFIG_HOME`），不修改持久化的 universal 变量。`codex exec` 等非交互命令、管道输入、`resume`/`fork`、显式 `--remote`、`--profile` 以及 `--oss`/`--local-provider` 启动均转交官方 Codex；**resume/fork/profile/remote/本地模型启动没有路由横幅**，会打印提示。远端连接会改变恢复/派生会话的目录选择行为，且目前无法把 profile-v2 的服务商配置层安全地传给独立 app-server。Windows 可在 WSL 中运行。已经打开的终端和会话不会被强行改造。
+这是明确披露的**官方 Codex 源码定制构建**，固定源码提交，提供可审查补丁和[构建说明](codex/model-guard/native/README.md)。官方 Codex 目前没有插件页脚渲染接口，因此 Model Guard 在源码内部加入元数据和原生渲染。不增加 tmux 服务、终端代理、服务商代理或传输日志。账号和额度复用 Codex 自身状态；不修改默认模型、服务商或登录文件。发布包保留同一官方版本的 code-mode host 和沙箱辅助程序。
 
-在 Codex 插件目录中验证：
+原生构建需要随插件配套更新。另行安装官方 Codex、替换命令入口时，可能移除原生扩展；`doctor` 会检测这种情况。显式连接远端 app-server 时，远端也需要相同的元数据扩展才能提供完整路由信息，连接和命令行行为仍由原生 Codex 处理。
+
+显示配置位于 `~/.local/share/model-guard-codex/config.json`：`language`（`en` 或 `zh`）和 `show_account`（布尔值）。`MODEL_GUARD_CODEX_HOME` 可指定其他安装目录。在 Codex 中禁用插件即可关闭其显示。
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install --require-hashes -r requirements.lock
-.venv/bin/pip install --no-deps -e .
-PYTHONPATH=. MODEL_GUARD_INTEGRATION=1 .venv/bin/python -m unittest discover -s tests -v
+model-guard-codex probe --json   # 单独发起只读请求，消耗服务商用量
+model-guard-codex doctor        # 核验原生可执行文件及当前入口
+model-guard-codex remove        # 恢复原官方可执行文件软链接
 ```
 
-集成测试使用真实官方 Codex、本机 HTTP/SSE 与 WebSocket 假服务端、真实 tmux 和 PTY；不消耗模型 token，也不使用你的登录凭据。
+实时会话详情在 Codex 内用 `/status` 查看；旧的外部 `status`、`check` 命令现在会指向这个入口。`probe` 的 `-m 模型 -r 强度` 只影响该次探针。退出码：`0` 有效模型披露一致，`2` 不同，`3` 缺少披露，`4` 探针不可用或失败。JSON 不包含账号或对话内容，独立探针不能替已有会话验证路由。
+
+移除时保留运行中的会话、版本包和偏好。迁移时删除旧版受管理的 shell 区块，不再添加新的 PATH 区块。验证使用隔离的 Codex 目录、本机 HTTP/SSE 与 WebSocket 假服务端、Rust 状态与布局测试，以及真实原生 PTY；命令见构建说明。
 
 ## 「降级」是怎么判定的
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.6.0 — 2026-09-09
+
+- **Native Codex status line.** Replace the terminal multiplexer and live protocol
+  adapter with a pinned, auditable Codex source build. Reuse the existing footer
+  and input handling; `codex`, `cx`, `resume`, `fork` and profiles use the same CLI.
+- Keep normal display quiet. Show model, request effort and account; only
+  disclosed routing differences and repeated 516 signals expand a warning.
+  Missing disclosure, individual hits and detailed counts are in `/status`.
+- Bind typed route events to the visible thread, turn and sampling request.
+  Hidden system title threads cannot replace the main model. Count unique
+  response IDs; isolate reasoning observations across account/settings changes.
+- Install a checksum-verified native package by atomically switching the existing
+  executable symlink. Restore the original entry on removal, preserving running
+  sessions, defaults and login files. Include the matching official helper tools.
+- Move live external `status`/`check` diagnostics to native `/status`. Keep the
+  separate explicit `probe` and its strict disclosure-only exit codes.
+- Preserve Claude Code behavior and its per-model saved-effort handling.
+
 ## 1.5.1 — 2026-09-09
 
 - **Enable the Codex launcher in Fish.** Add a reversible PATH block to the

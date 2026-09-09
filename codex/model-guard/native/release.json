@@ -1,0 +1,40 @@
+{
+  "plugin_version": "1.6.0",
+  "codex_version": "0.153.4",
+  "upstream_repository": "https://github.com/openai/codex.git",
+  "upstream_ref": "rust-v0.153.4",
+  "upstream_commit": "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a",
+  "rust_version": "1.95.0",
+  "target": "x86_64-unknown-linux-gnu",
+  "patches": [
+    {
+      "file": "0001-routing-metadata.patch",
+      "sha256": "d8ea732f3579493662e788777827414ee28bf668f04c8eb278b163c7504e92af"
+    },
+    {
+      "file": "0002-native-status-line.patch",
+      "sha256": "613b4a9fea80c812d5faff8b67ab93185eb99e7b14d6f85baf739e2977272251"
+    },
+    {
+      "file": "0003-native-status-line-tests.patch",
+      "sha256": "158ec48ba30062a3c75a97e14331be79a02515cc8bddf85a770fd3d8f6b3a9f4"
+    },
+    {
+      "file": "0004-protocol-schemas.patch",
+      "sha256": "2edf2e0de0f569203f292e9b678c9e91b5f041feb3982b3f0d8a56fac4cef260"
+    },
+    {
+      "file": "0005-release-packaging.patch",
+      "sha256": "502f9da68cc2342e4fe1617e6cc87d2290f409d8fa4cbe3c4e7746a6a2390ca5"
+    }
+  ],
+  "helper_sha256": {
+    "bin/codex-code-mode-host": "3e85d67471825f73d02ff5f7e047ca1f6ca8caa3f59e4c6e8d9ca6ca7302cb45",
+    "codex-resources/bwrap": "77360cb751ccedc5971391444ac86a8a33c15b04d6b4a6fe45f5d25496e62c4c",
+    "codex-resources/zsh/bin/zsh": "67faaaa89242c4a332e16e508a1977cffc24bf7fca31d4411cdfd101f3831ef3",
+    "codex-path/rg": "e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849"
+  },
+  "sha256": "02e18164ae0ce5320c6d72bc9193dd5b4c74efb939f11723eda1b62349f4350a",
+  "url": "https://github.com/ventusff/claude-model-guard/releases/download/v1.6.0/model-guard-codex-linux-x86_64.tar.gz",
+  "binary_sha256": "0d742710922427f8bdd84bbecfa0cc57059e15a1f785e5ae0f74c9efe823eb56"
+}

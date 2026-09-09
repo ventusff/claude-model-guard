@@ -1,0 +1,468 @@
+diff --git a/codex-rs/tui/src/chatwidget/model_guard_tests.rs b/codex-rs/tui/src/chatwidget/model_guard_tests.rs
+new file mode 100644
+index 0000000..aecb7cd
+--- /dev/null
++++ b/codex-rs/tui/src/chatwidget/model_guard_tests.rs
+@@ -0,0 +1,374 @@
++use super::*;
++use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
++use codex_app_server_protocol::RawResponseCompletedNotification;
++use codex_app_server_protocol::Turn;
++use codex_app_server_protocol::TurnStartedNotification;
++use codex_app_server_protocol::TurnStatus;
++use pretty_assertions::assert_eq;
++
++async fn widget() -> ChatWidget {
++    let (mut chat, _sender, _events, _operations) = make_chatwidget_manual_with_sender().await;
++    chat.set_model("gpt-6-astra");
++    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Max));
++    chat.thread_id = Some(ThreadId::new());
++    chat.model_guard = Some(ModelGuard::default());
++    let start = ServerNotification::TurnStarted(TurnStartedNotification {
++        thread_id: chat.thread_id.unwrap().to_string(),
++        turn: Turn {
++            id: "turn-1".into(),
++            items: Vec::new(),
++            items_view: Default::default(),
++            status: TurnStatus::InProgress,
++            error: None,
++            started_at: None,
++            completed_at: None,
++            duration_ms: None,
++        },
++    });
++    chat.observe_model_guard(&start, /*replay_kind*/ None);
++    chat.observe_model_guard(&route(&chat, None), None);
++    chat
++}
++
++fn route(chat: &ChatWidget, actual: Option<&str>) -> ServerNotification {
++    ServerNotification::ModelRoutingUpdated(ModelRoutingUpdatedNotification {
++        thread_id: chat.thread_id.unwrap().to_string(),
++        turn_id: "turn-1".into(),
++        request_id: "request-1".into(),
++        requested_model: "gpt-6-astra".into(),
++        server_model: actual.map(str::to_owned),
++        model_provider: "openai".into(),
++        reasoning_effort: Some("max".into()),
++        service_tier: None,
++    })
++}
++
++fn completion(chat: &ChatWidget, id: &str, tokens: i64) -> ServerNotification {
++    ServerNotification::RawResponseCompleted(RawResponseCompletedNotification {
++        thread_id: chat.thread_id.unwrap().to_string(),
++        turn_id: "turn-1".into(),
++        response_id: id.into(),
++        usage_metadata: None,
++        usage: Some(TokenUsageBreakdown {
++            input_tokens: 2000,
++            cached_input_tokens: 0,
++            cache_write_input_tokens: 0,
++            output_tokens: tokens + 10,
++            reasoning_output_tokens: tokens,
++            total_tokens: tokens + 2010,
++        }),
++    })
++}
++
++fn lines(chat: &ChatWidget) -> String {
++    chat.model_guard_lines()
++        .unwrap()
++        .iter()
++        .map(ToString::to_string)
++        .collect::<Vec<_>>()
++        .join("\n")
++}
++
++#[tokio::test]
++async fn native_guard_hidden_title_and_other_turn_cannot_replace_visible_model() {
++    let mut chat = widget().await;
++    chat.observe_model_guard(
++        &route(&chat, Some("gpt-6-astra")),
++        /*replay_kind*/ None,
++    );
++    let before = lines(&chat);
++    let mut title = route(&chat, Some("gpt-5.6-luna"));
++    if let ServerNotification::ModelRoutingUpdated(n) = &mut title {
++        n.thread_id = ThreadId::new().to_string();
++        n.requested_model = "gpt-5.6-luna".into();
++        n.reasoning_effort = Some("low".into());
++    }
++    chat.observe_model_guard(&title, /*replay_kind*/ None);
++    let mut stale = route(&chat, Some("gpt-4o"));
++    if let ServerNotification::ModelRoutingUpdated(n) = &mut stale {
++        n.turn_id = "old-turn".into();
++    }
++    chat.observe_model_guard(&stale, /*replay_kind*/ None);
++    assert_eq!(lines(&chat), before);
++}
++
++#[tokio::test]
++async fn native_guard_counts_unique_responses_and_keeps_route_independent() {
++    let mut chat = widget().await;
++    chat.observe_model_guard(
++        &route(&chat, Some("gpt-6-astra")),
++        /*replay_kind*/ None,
++    );
++    for (id, tokens) in [
++        ("a", 516),
++        ("a", 516),
++        ("b", 1024),
++        ("c", 516),
++        ("d", 1200),
++        ("e", 516),
++    ] {
++        chat.observe_model_guard(&completion(&chat, id, tokens), /*replay_kind*/ None);
++    }
++    let guard = chat.model_guard.as_ref().unwrap();
++    assert_eq!(
++        (
++            guard.samples.len(),
++            guard.turn_hits,
++            guard.alert(),
++            guard.mismatch.as_ref()
++        ),
++        (5, 3, "suspect", None)
++    );
++    insta::assert_snapshot!(lines(&chat), @r"
++     request gpt-6-astra · max · server reported gpt-6-astra
++     Reasoning anomaly signal: 3 of the last 5 responses used 516 tokens
++    ");
++}
++
++#[tokio::test]
++async fn native_guard_preserves_mismatch_when_next_request_has_no_disclosure() {
++    let mut chat = widget().await;
++    chat.observe_model_guard(&route(&chat, Some("gpt-4o")), /*replay_kind*/ None);
++    chat.observe_model_guard(&route(&chat, /*actual*/ None), /*replay_kind*/ None);
++    let guard = chat.model_guard.as_ref().unwrap();
++    assert_eq!(
++        guard.mismatch,
++        Some(("gpt-6-astra".into(), "gpt-4o".into()))
++    );
++    assert_eq!(guard.route.as_ref().unwrap().server_model, None);
++    assert!(lines(&chat).contains("ROUTE DIFF gpt-6-astra → gpt-4o"));
++}
++
++#[tokio::test]
++async fn native_guard_account_boundary_suspends_in_flight_usage() {
++    let mut chat = widget().await;
++    chat.observe_model_guard(&completion(&chat, "a", 516), /*replay_kind*/ None);
++    chat.model_guard.as_mut().unwrap().account_changed();
++    chat.observe_model_guard(&completion(&chat, "b", 516), /*replay_kind*/ None);
++    chat.observe_model_guard(&route(&chat, Some("gpt-4o")), /*replay_kind*/ None);
++    let guard = chat.model_guard.as_ref().unwrap();
++    assert_eq!(
++        (
++            guard.samples.len(),
++            guard.last_tokens,
++            guard.route.as_ref(),
++            guard.alert()
++        ),
++        (0, None, None, "none")
++    );
++}
++
++#[tokio::test]
++async fn native_guard_scope_change_and_replay_do_not_recount_previous_response() {
++    let mut chat = widget().await;
++    let response = completion(&chat, "a", 516);
++    chat.observe_model_guard(&response, /*replay_kind*/ None);
++    let mut changed = route(&chat, /*actual*/ None);
++    if let ServerNotification::ModelRoutingUpdated(n) = &mut changed {
++        n.reasoning_effort = Some("low".into());
++    }
++    chat.observe_model_guard(&changed, /*replay_kind*/ None);
++    chat.observe_model_guard(&response, /*replay_kind*/ None);
++    chat.observe_model_guard(
++        &completion(&chat, "b", 516),
++        Some(ReplayKind::ResumeInitialMessages),
++    );
++    assert_eq!(chat.model_guard.as_ref().unwrap().samples.len(), 0);
++    chat.observe_model_guard(&completion(&chat, "c", 516), /*replay_kind*/ None);
++    assert_eq!(chat.model_guard.as_ref().unwrap().alert(), "none");
++}
++
++#[tokio::test]
++async fn native_guard_layout_preserves_composer_cursor_at_multiple_widths() {
++    let mut chat = widget().await;
++    chat.observe_model_guard(&route(&chat, Some("gpt-4o")), /*replay_kind*/ None);
++    for width in [40, 80, 140] {
++        let height = chat.desired_height(width);
++        let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
++        let cursor = chat.cursor_pos(area);
++        let mut buf = Buffer::empty(area);
++        chat.render(area, &mut buf);
++        let guard = chat.model_guard.take();
++        let stock_height = chat.desired_height(width);
++        let stock_cursor =
++            chat.cursor_pos(Rect::new(/*x*/ 0, /*y*/ 0, width, stock_height));
++        assert_eq!((height, cursor), (stock_height + 1, stock_cursor));
++        chat.model_guard = guard;
++        insta::assert_snapshot!(
++            format!("native_guard_width_{width}"),
++            buf.content
++                .chunks(usize::from(width))
++                .map(|row| row
++                    .iter()
++                    .map(ratatui::buffer::Cell::symbol)
++                    .collect::<String>()
++                    .trim_end()
++                    .to_owned())
++                .collect::<Vec<_>>()
++                .join("\n")
++        );
++    }
++}
++
++#[tokio::test]
++async fn native_guard_default_is_one_quiet_row_and_one_516_hit_stays_in_details() {
++    let mut chat = widget().await;
++    chat.observe_model_guard(&completion(&chat, "a", 516), /*replay_kind*/ None);
++    chat.model_guard.as_mut().unwrap().running = false;
++    insta::assert_snapshot!(lines(&chat), @" selected gpt-6-astra · max");
++    assert_eq!(chat.model_guard_lines().unwrap().len(), 1);
++}
++
++#[tokio::test]
++async fn native_guard_wire_effort_scope_survives_ultra_turn_boundaries() {
++    let mut chat = widget().await;
++    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Ultra));
++    for index in 0..5 {
++        let turn_id = format!("wire-turn-{index}");
++        let start = ServerNotification::TurnStarted(TurnStartedNotification {
++            thread_id: chat.thread_id.unwrap().to_string(),
++            turn: Turn {
++                id: turn_id.clone(),
++                items: Vec::new(),
++                items_view: Default::default(),
++                status: TurnStatus::InProgress,
++                error: None,
++                started_at: None,
++                completed_at: None,
++                duration_ms: None,
++            },
++        });
++        chat.observe_model_guard(&start, None);
++        let mut metadata = route(&chat, None);
++        if let ServerNotification::ModelRoutingUpdated(n) = &mut metadata {
++            n.turn_id = turn_id.clone();
++        }
++        chat.observe_model_guard(&metadata, None);
++        let mut response = completion(&chat, &format!("wire-response-{index}"), 516);
++        if let ServerNotification::RawResponseCompleted(n) = &mut response {
++            n.turn_id = turn_id;
++        }
++        chat.observe_model_guard(&response, None);
++    }
++    let guard = chat.model_guard.as_ref().unwrap();
++    assert_eq!(guard.samples.len(), 5);
++    assert_eq!(guard.alert(), "suspect");
++    assert!(lines(&chat).contains("request gpt-6-astra · max"));
++}
++
++fn started(chat: &ChatWidget, turn_id: &str) -> ServerNotification {
++    ServerNotification::TurnStarted(TurnStartedNotification {
++        thread_id: chat.thread_id.unwrap().to_string(),
++        turn: Turn {
++            id: turn_id.into(),
++            items: Vec::new(),
++            items_view: Default::default(),
++            status: TurnStatus::InProgress,
++            error: None,
++            started_at: None,
++            completed_at: None,
++            duration_ms: None,
++        },
++    })
++}
++
++#[tokio::test]
++async fn native_guard_resume_restores_active_lifecycle_without_replaying_evidence() {
++    let mut chat = widget().await;
++    chat.model_guard = Some(ModelGuard::default());
++    let ServerNotification::TurnStarted(start) = started(&chat, "turn-1") else {
++        unreachable!()
++    };
++    chat.replay_thread_turns(vec![start.turn], ReplayKind::ResumeInitialMessages);
++    chat.observe_model_guard(
++        &completion(&chat, "historical", 516),
++        Some(ReplayKind::ResumeInitialMessages),
++    );
++    assert_eq!(chat.model_guard.as_ref().unwrap().samples.len(), 0);
++    chat.observe_model_guard(&route(&chat, Some("gpt-4o")), None);
++    chat.observe_model_guard(&completion(&chat, "live", 516), None);
++    assert_eq!(chat.model_guard.as_ref().unwrap().samples.len(), 1);
++    assert!(lines(&chat).contains("ROUTE DIFF"));
++}
++
++#[tokio::test]
++async fn native_guard_selection_boundary_hides_old_anomaly_before_wire_metadata() {
++    let mut chat = widget().await;
++    for i in 0..5 {
++        chat.observe_model_guard(&completion(&chat, &i.to_string(), 516), None);
++    }
++    assert!(lines(&chat).contains("Reasoning anomaly"));
++    chat.model_guard.as_mut().unwrap().running = false;
++    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Low));
++    assert!(!lines(&chat).contains("Reasoning anomaly"));
++    chat.observe_model_guard(&started(&chat, "turn-2"), None);
++    assert!(lines(&chat).contains("selected gpt-6-astra · low"));
++    assert_eq!(chat.model_guard.as_ref().unwrap().samples.len(), 0);
++}
++
++#[tokio::test]
++async fn native_guard_account_change_does_not_label_old_request_with_new_login() {
++    let mut chat = widget().await;
++    chat.observe_model_guard(&route(&chat, None), None);
++    chat.model_guard.as_mut().unwrap().account_changed();
++    chat.status_account_display = Some(StatusAccountDisplay::ChatGpt {
++        email: Some("new@example.com".into()),
++        plan: Some("pro".into()),
++    });
++    assert!(lines(&chat).contains("selected gpt-6-astra · max · new@example.com"));
++    assert!(!lines(&chat).contains("request "));
++}
++
++#[tokio::test]
++async fn native_guard_narrow_warning_preserves_destination_and_reasoning_count() {
++    let mut chat = widget().await;
++    for case in 0..2 {
++        if case == 0 {
++            for i in 0..5 {
++                chat.observe_model_guard(&completion(&chat, &i.to_string(), 516), None);
++            }
++        } else {
++            let mut notification = route(&chat, Some("gpt-4o"));
++            if let ServerNotification::ModelRoutingUpdated(n) = &mut notification {
++                n.requested_model =
++                    "requested-model-with-a-long-revision-and-deployment-name".into();
++            }
++            chat.observe_model_guard(&notification, None);
++        }
++        let width = 40;
++        let area = Rect::new(0, 0, width, chat.desired_height(width));
++        let mut buf = Buffer::empty(area);
++        chat.render(area, &mut buf);
++        let text = buf
++            .content
++            .chunks(usize::from(width))
++            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
++            .collect::<Vec<_>>()
++            .join("\n");
++        if case == 0 {
++            assert!(text.contains("516"));
++        } else {
++            assert!(text.contains("gpt-4o"));
++        }
++        insta::assert_snapshot!(format!("native_guard_wrapped_warning_{case}"), text);
++    }
++}
++
++#[tokio::test]
++async fn native_guard_attached_request_without_metadata_never_infers_its_effort() {
++    let mut chat = widget().await;
++    chat.model_guard = Some(ModelGuard::default());
++    let ServerNotification::TurnStarted(start) = started(&chat, "turn-1") else {
++        unreachable!()
++    };
++    chat.replay_thread_turns(vec![start.turn], ReplayKind::ResumeInitialMessages);
++    for i in 0..5 {
++        chat.observe_model_guard(&completion(&chat, &i.to_string(), 516), None);
++    }
++    assert_eq!(chat.model_guard.as_ref().unwrap().alert(), "none");
++    assert!(lines(&chat).contains("selected gpt-6-astra · max"));
++    assert!(!lines(&chat).contains("request "));
++    chat.observe_model_guard(&route(&chat, None), None);
++    assert!(lines(&chat).contains("request gpt-6-astra · max"));
++    assert_eq!(chat.model_guard.as_ref().unwrap().samples.len(), 0);
++}
+diff --git a/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_140.snap b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_140.snap
+new file mode 100644
+index 0000000..ef49db7
+--- /dev/null
++++ b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_140.snap
+@@ -0,0 +1,11 @@
++---
++source: tui/src/chatwidget/model_guard_tests.rs
++assertion_line: 196
++expression: "buf.content.chunks(usize::from(width)).map(|row|\nrow.iter().map(|cell|\ncell.symbol()).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>().join(\"\\n\")"
++---
++
++
++› Ask Codex to do anything
++
++   request gpt-6-astra · max · /tmp/project
++ ROUTE DIFF gpt-6-astra → gpt-4o
+diff --git a/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_40.snap b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_40.snap
+new file mode 100644
+index 0000000..a061c72
+--- /dev/null
++++ b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_40.snap
+@@ -0,0 +1,11 @@
++---
++source: tui/src/chatwidget/model_guard_tests.rs
++assertion_line: 196
++expression: "buf.content.chunks(usize::from(width)).map(|row|\nrow.iter().map(|cell|\ncell.symbol()).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>().join(\"\\n\")"
++---
++
++
++› Ask Codex to do anything
++
++   request gpt-6-astra · max · /tmp/pro…
++ ROUTE DIFF gpt-6-astra → gpt-4o
+diff --git a/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_80.snap b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_80.snap
+new file mode 100644
+index 0000000..ef49db7
+--- /dev/null
++++ b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_80.snap
+@@ -0,0 +1,11 @@
++---
++source: tui/src/chatwidget/model_guard_tests.rs
++assertion_line: 196
++expression: "buf.content.chunks(usize::from(width)).map(|row|\nrow.iter().map(|cell|\ncell.symbol()).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>().join(\"\\n\")"
++---
++
++
++› Ask Codex to do anything
++
++   request gpt-6-astra · max · /tmp/project
++ ROUTE DIFF gpt-6-astra → gpt-4o
+diff --git a/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_wrapped_warning_0.snap b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_wrapped_warning_0.snap
+new file mode 100644
+index 0000000..5e59e5f
+--- /dev/null
++++ b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_wrapped_warning_0.snap
+@@ -0,0 +1,12 @@
++---
++source: tui/src/chatwidget/model_guard_tests.rs
++assertion_line: 352
++expression: text
++---
++                                        
++                                        
++› Ask Codex to do anything              
++                                        
++   request gpt-6-astra · max · /tmp/pro…
++ Reasoning anomaly signal: 5 of the last
++5 responses used 516 tokens
+diff --git a/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_wrapped_warning_1.snap b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_wrapped_warning_1.snap
+new file mode 100644
+index 0000000..6e41fca
+--- /dev/null
++++ b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_wrapped_warning_1.snap
+@@ -0,0 +1,13 @@
++---
++source: tui/src/chatwidget/model_guard_tests.rs
++assertion_line: 352
++expression: text
++---
++                                        
++                                        
++› Ask Codex to do anything              
++                                        
++   request requested-model-with-a-long-…
++ ROUTE DIFF                             
++requested-model-with-a-long-revision-and
++-deployment-name → gpt-4o

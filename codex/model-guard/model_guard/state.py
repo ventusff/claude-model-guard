@@ -5,7 +5,7 @@ import re
 import time
 import unicodedata
 
-from .reasoning import Reasoning, alert_text, usage_text
+from .reasoning import Reasoning
 
 
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,159}\Z")
@@ -54,6 +54,7 @@ class Thread:
     reasoning: Reasoning = field(default_factory=Reasoning)
     usage_suspended: bool = False
     show_turn_settings: bool = False
+    native_routing: bool = False
 
     def settings(self, data):
         requested = model_id(data.get("model"))
@@ -139,7 +140,11 @@ class State:
         if method in ("thread/start", "thread/resume", "thread/fork", "thread/rollback", "account/read"):
             rid = msg.get("id")
             if type(rid) in (str, int) and len(self.pending) < 128:
-                self.pending[rid] = (method, self.auth_epoch)
+                # The TUI also starts hidden feature threads (for example titles).
+                # Their model, effort and usage never describe the visible task.
+                source = params.get("threadSource")
+                visible = source is None or source == "user"
+                self.pending[rid] = (method, self.auth_epoch, visible)
         if method in ("turn/start", "thread/settings/update"):
             thread = self.threads.get(params.get("threadId"))
             if thread:
@@ -157,6 +162,9 @@ class State:
                     self.set_account(result.get("account"))
             else:
                 thread_data = result.get("thread") or {}
+                source = thread_data.get("threadSource")
+                if not pending[2] or (source is not None and source != "user"):
+                    return
                 thread = self.thread(thread_data.get("id"))
                 if thread:
                     self.selected = thread.id
@@ -191,6 +199,17 @@ class State:
         elif method == "turn/completed":
             if thread.turn_id == (params.get("turn") or {}).get("id"):
                 thread.running = thread.sampling = False
+        elif method == "model/routing/updated":
+            if params.get("turnId") != thread.turn_id or not thread.running:
+                return
+            thread.native_routing = True
+            thread.requested = model_id(params.get("requestedModel")) or thread.requested
+            thread.turn_provider = label(params.get("modelProvider"), 60)
+            thread.turn_effort = label(params.get("reasoningEffort"), 20)
+            thread.turn_tier = label(params.get("serviceTier"), 20)
+            thread.observed = thread.source = thread.observed_at = None
+            thread.reasoning.activate(thread.reasoning_scope())
+            thread.observe(params.get("serverModel"), "model/routing/updated", params.get("requestedModel"))
         elif method == "model/rerouted":
             if params.get("turnId") == thread.turn_id:
                 thread.observe(params.get("toModel"), "model/rerouted", params.get("fromModel"))
@@ -220,7 +239,7 @@ class State:
         thread = self.threads.get(fields.get("thread_id"))
         # Requiring both identifiers prevents a delayed record or agent response
         # from being attributed to the visible turn.
-        if not thread:
+        if not thread or thread.native_routing:
             return
         message = (record.get("fields") or {}).get("message")
         if not isinstance(message, str):
@@ -303,93 +322,3 @@ class State:
             "account": account if self.show_account else None, "account_hidden": not self.show_account,
             "limits": self.limits if account and time.time() - self.limits_at <= 60 else {},
         }
-
-
-def render(snapshot, language="en", row=None):
-    """Return plain content plus a semantic color. Route information always comes first."""
-    zh = language == "zh"
-    t = snapshot.get("thread") or {}
-    actual, wanted = t.get("observed"), t.get("requested") or "?"
-    health = snapshot.get("health")
-    if health not in ("connected", "starting"):
-        return "alarm", ("监测中断" if zh else "MONITOR LOST") + " | " + str(health)
-    if t.get("mismatch"):
-        color, title = "alarm", "路由变化" if zh else "ROUTE DIFF"
-        wanted = t.get("mismatch_requested") or wanted
-        route = f"{wanted} → {t['mismatch']}"
-        if actual != t["mismatch"]:
-            route += (" (本轮曾出现；当前=" if zh else " (earlier this turn; current=") + (actual or "?") + ")"
-    elif actual:
-        color, title = "ok", "服务端回报" if zh else "SERVER"
-        route = actual
-    else:
-        color, title = "unknown", "路由未验证" if zh else "ROUTE UNVERIFIED"
-        route = wanted + " → ?"
-    parts = [title + " " + route]
-    if actual and not t.get("running"):
-        parts[0] += " (上轮)" if zh else " (last turn)"
-    signal = t.get("reasoning") or {}
-    warning = alert_text(signal, zh)
-    if warning and not t.get("mismatch"):
-        parts[0] = warning + " | " + parts[0]
-        color = "alarm" if signal["alert"] == "suspect" else "unknown"
-    effort, tier = t.get("effort"), t.get("tier")
-    if effort:
-        parts.append(effort + (" / " + tier if tier else ""))
-    model_parts = len(parts)
-    if t:
-        parts.append(usage_text(signal, zh))
-    account = snapshot.get("account")
-    if account:
-        if account["type"] == "chatgpt":
-            parts.append((account.get("email") or "ChatGPT") + " · " + account.get("plan", ""))
-        else:
-            parts.append("API key" if account["type"] == "apiKey" else "Amazon Bedrock")
-    elif t and snapshot.get("account_hidden"):
-        parts.append(t.get("provider", "?"))
-    elif t:
-        parts.append(("账号未知" if zh else "account unknown") + " · " + t.get("provider", "?"))
-    if t.get("context") is not None:
-        parts.append(("上下文 " if zh else "ctx ") + f"{t['context']}%")
-    for limit in snapshot.get("limits", {}).values():
-        minutes = limit["minutes"]
-        window = f"{minutes / 1440:g}d" if minutes >= 1440 else f"{minutes / 60:g}h"
-        parts.append(f"{window} {limit['used']:g}% " + ("已用" if zh else "used"))
-    if row == 0:
-        parts = parts[:model_parts]
-    elif row == 1:
-        parts = parts[model_parts:] or [("等待会话" if zh else "Waiting for session")]
-    return color, " | ".join(label(p, 300) for p in parts)
-
-
-# Truecolor / xterm-256 pairs each provide at least 7:1 contrast.
-COLORS = {
-    "ok": ("#000000", "#3FB950", "colour16", "colour77"),
-    "alarm": ("#FFFFFF", "#B00020", "colour231", "colour124"),
-    "unknown": ("#000000", "#FFB300", "colour16", "colour214"),
-}
-
-
-def fit(text, width):
-    result, cells = [], 0
-    for char in text:
-        size = 0 if unicodedata.combining(char) else (2 if unicodedata.east_asian_width(char) in "WF" else 1)
-        if cells + size > width:
-            break
-        result.append(char)
-        cells += size
-    return "".join(result) + " " * max(0, width - cells)
-
-
-def tmux_band(snapshot, language="en", truecolor=True, row=0, width=120):
-    color, content = render(snapshot, language, row)
-    thread = snapshot.get("thread") or {}
-    if row == 0 and color == "alarm" and thread.get("mismatch") and len(content) >= width:
-        content = ("本轮路由变化 → " if language == "zh" else "TURN DIFF → ") + thread["mismatch"] + " | req " + (thread.get("mismatch_requested") or thread.get("requested") or "?")
-    fg, bg, fg256, bg256 = COLORS[color]
-    if not truecolor:
-        fg, bg = fg256, bg256
-    # tmux formats are executable: '#' must never arrive from runtime metadata.
-    # Fullwidth replacement preserves readability without recursive expansion.
-    content = content.replace("#", "＃")
-    return f"#[fg={fg},bg={bg},bold]" + fit(" " + content, width), f"fg={fg},bg={bg}"

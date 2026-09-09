@@ -22,9 +22,10 @@ from model_guard.state import State
 
 
 class ResponsesFixture:
-    def __init__(self, model, reasoning=None):
+    def __init__(self, model, reasoning=None, output_text="OK"):
         self.model, self.requests = model, []
         self.reasoning = reasoning or [0]
+        self.output_text = output_text
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -51,7 +52,7 @@ class ResponsesFixture:
         index = len(self.requests) - 1
         tokens = self.reasoning[min(index, len(self.reasoning) - 1)]
         response_id = f"resp_test_{index}"
-        item = {"id": "msg_test", "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "OK"}]}
+        item = {"id": "msg_test", "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": self.output_text}]}
         return [
             {"type": "response.created", "response": {"id": response_id, "model": "gpt-4o"}},
             {"type": "response.output_item.done", "output_index": 0, "item": item},
@@ -81,7 +82,7 @@ class ResponsesFixture:
 
 @unittest.skipUnless(os.environ.get("MODEL_GUARD_INTEGRATION") == "1", "set MODEL_GUARD_INTEGRATION=1 to exercise stock Codex")
 class OfficialCodexTests(unittest.IsolatedAsyncioTestCase):
-    async def exercise(self, observed, websocket=False, probe_mode=False, reasoning=None):
+    async def exercise(self, observed, websocket=False, probe_mode=False, reasoning=None, hidden_title=False):
         binary = os.environ.get("MODEL_GUARD_CODEX_BIN") or shutil.which("codex")
         with tempfile.TemporaryDirectory(prefix="mg-test-") as temp, ResponsesFixture(observed, reasoning) as api:
             base = Path(temp)
@@ -136,6 +137,21 @@ class OfficialCodexTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.sleep(0.2)
                     snapshot = state.snapshot()
                     self.assertEqual(api.requests[-1]["model"], "gpt-6-astra")
+                    if hidden_title:
+                        await ws.send(json.dumps({"id": 100, "method": "thread/start", "params": {
+                            "model": "gpt-5.6-luna", "modelProvider": "fixture", "cwd": temp,
+                            "ephemeral": True, "threadSource": "system", "approvalPolicy": "never",
+                            "sandbox": "read-only", "config": {"model_reasoning_effort": "low"}}}))
+                        title = await self.receive(ws, lambda msg: msg.get("id") == 100)
+                        self.assertNotIn("error", title)
+                        hidden_id = title["result"]["thread"]["id"]
+                        await ws.send(json.dumps({"id": 101, "method": "turn/start", "params": {
+                            "threadId": hidden_id, "effort": "low", "input": [{"type": "text", "text": "Reply OK."}]}}))
+                        await self.receive(ws, lambda msg: msg.get("method") == "turn/completed" and msg.get("params", {}).get("threadId") == hidden_id)
+                        await asyncio.sleep(.2)
+                        self.assertEqual(api.requests[-1]["model"], "gpt-5.6-luna")
+                        self.assertEqual(state.snapshot()["thread"], snapshot["thread"])
+                        self.assertEqual(state.selected, tid)
                     self.assertEqual(snapshot["thread"]["observed"], observed, str(snapshot))
                     self.assertIsNone(snapshot["account"])
                     self.assertEqual(snapshot["thread"]["mismatch"], observed if observed == "gpt-4o" else None)
@@ -159,6 +175,9 @@ class OfficialCodexTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_header_confirms_model(self):
         await self.exercise("gpt-6-astra")
+
+    async def test_hidden_luna_title_does_not_replace_main_astra_thread(self):
+        await self.exercise("gpt-6-astra", hidden_title=True)
 
     async def test_header_routes_to_gpt4o(self):
         await self.exercise("gpt-4o")

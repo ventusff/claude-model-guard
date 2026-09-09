@@ -1,0 +1,690 @@
+diff --git a/codex-rs/tui/src/app/app_server_event_targets.rs b/codex-rs/tui/src/app/app_server_event_targets.rs
+index 27359fd..79a119c 100644
+--- a/codex-rs/tui/src/app/app_server_event_targets.rs
++++ b/codex-rs/tui/src/app/app_server_event_targets.rs
+@@ -133,6 +133,9 @@ pub(super) fn server_notification_thread_target(
+         }
+         ServerNotification::ContextCompacted(notification) => Some(notification.thread_id.as_str()),
+         ServerNotification::ModelRerouted(notification) => Some(notification.thread_id.as_str()),
++        ServerNotification::ModelRoutingUpdated(notification) => {
++            Some(notification.thread_id.as_str())
++        }
+         ServerNotification::ModelVerification(notification) => {
+             Some(notification.thread_id.as_str())
+         }
+diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
+index 40eadfa..6f17055 100644
+--- a/codex-rs/tui/src/chatwidget.rs
++++ b/codex-rs/tui/src/chatwidget.rs
+@@ -430,6 +430,7 @@ mod status_controls;
+ mod status_surfaces;
+ mod streaming;
+ use self::status_surfaces::CachedProjectRootName;
++mod model_guard;
+ mod thread_usage;
+ pub(crate) use self::thread_usage::ThreadUsageOutcome;
+ mod tokens;
+@@ -780,6 +781,7 @@ pub(crate) struct ChatWidget {
+     status_line_workspace_messages_disabled: bool,
+     // Cached backend-estimated cost and bounded refresh state for the current thread.
+     thread_usage: thread_usage::ThreadUsageState,
++    model_guard: Option<model_guard::ModelGuard>,
+     // Current thread-goal status shown in the status line when plan mode is inactive.
+     current_goal_status_indicator: Option<GoalStatusIndicator>,
+     current_goal_status: Option<GoalStatusState>,
+diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
+index a1079ac..2c1fe44 100644
+--- a/codex-rs/tui/src/chatwidget/constructor.rs
++++ b/codex-rs/tui/src/chatwidget/constructor.rs
+@@ -94,6 +94,7 @@ impl ChatWidget {
+             app_event_tx.clone(),
+             pet_http_client.clone(),
+         );
++        let model_guard = model_guard::ModelGuard::from_config(&config);
+         let mut widget = Self {
+             app_event_tx: app_event_tx.clone(),
+             frame_requester: frame_requester.clone(),
+@@ -254,6 +255,7 @@ impl ChatWidget {
+             status_line_workspace_headline_last_requested_at: None,
+             status_line_workspace_messages_disabled: false,
+             thread_usage: thread_usage::ThreadUsageState::default(),
++            model_guard,
+             current_goal_status_indicator: None,
+             current_goal_status: None,
+             external_editor_state: ExternalEditorState::Closed,
+diff --git a/codex-rs/tui/src/chatwidget/model_guard.rs b/codex-rs/tui/src/chatwidget/model_guard.rs
+new file mode 100644
+index 0000000..92a6709
+--- /dev/null
++++ b/codex-rs/tui/src/chatwidget/model_guard.rs
+@@ -0,0 +1,294 @@
++//! Native routing and reasoning metadata for this widget's thread only.
++//!
++//! This surface participates in Codex's normal layout. It neither controls the
++//! terminal nor selects a thread from background app-server traffic.
++
++use super::*;
++use codex_app_server_protocol::ModelRoutingUpdatedNotification;
++use codex_app_server_protocol::TokenUsageBreakdown;
++use std::collections::VecDeque;
++use std::io::Read;
++
++#[derive(serde::Deserialize)]
++#[serde(default)]
++pub(super) struct GuardSettings {
++    language: String,
++    show_account: bool,
++}
++
++impl Default for GuardSettings {
++    fn default() -> Self {
++        Self {
++            language: "en".into(),
++            show_account: true,
++        }
++    }
++}
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++struct Scope {
++    model: String,
++    provider: String,
++    effort: Option<String>,
++    tier: Option<String>,
++}
++
++#[derive(Default)]
++pub(super) struct ModelGuard {
++    settings: GuardSettings,
++    turn_id: Option<String>,
++    running: bool,
++    suspended: bool,
++    route: Option<ModelRoutingUpdatedNotification>,
++    mismatch: Option<(String, String)>,
++    scope: Option<Scope>,
++    turn_scope: Option<Scope>,
++    samples: VecDeque<i64>,
++    seen: VecDeque<String>,
++    last_tokens: Option<i64>,
++    turn_hits: usize,
++}
++
++impl ModelGuard {
++    pub(super) fn from_config(config: &Config) -> Option<Self> {
++        let effective = config.config_layer_stack.effective_config();
++        let plugins = effective.get("plugins")?.as_table()?;
++        if !config.features.enabled(Feature::Plugins)
++            || !plugins.iter().any(|(name, value)| {
++                name.split_once('@')
++                    .is_some_and(|(plugin, _)| plugin == "model-guard")
++                    && value
++                        .get("enabled")
++                        .and_then(toml::Value::as_bool)
++                        .unwrap_or(true)
++            })
++        {
++            return None;
++        }
++        let root = std::env::var_os("MODEL_GUARD_CODEX_HOME")
++            .map(PathBuf::from)
++            .or_else(|| dirs::home_dir().map(|home| home.join(".local/share/model-guard-codex")));
++        // Only this plugin's display preferences are read. Identity comes from
++        // the native account state; login files and rollouts are never inspected.
++        let settings = root
++            .and_then(|root| {
++                let file = std::fs::File::open(root.join("config.json")).ok()?;
++                serde_json::from_reader(file.take(16 * 1024)).ok()
++            })
++            .unwrap_or_default();
++        Some(Self {
++            settings,
++            ..Self::default()
++        })
++    }
++
++    fn start_turn(&mut self, turn_id: &str, scope: Scope) {
++        if self.turn_id.as_deref() == Some(turn_id) {
++            return;
++        }
++        self.turn_id = Some(turn_id.to_owned());
++        self.running = true;
++        self.suspended = false;
++        self.route = None;
++        self.mismatch = None;
++        self.turn_hits = 0;
++        if self.turn_scope.as_ref() != Some(&scope) {
++            self.scope = None;
++            self.samples.clear();
++            self.last_tokens = None;
++        }
++        self.turn_scope = Some(scope);
++    }
++
++    fn activate(&mut self, scope: Option<Scope>) {
++        if self.scope != scope {
++            self.scope = scope;
++            self.samples.clear();
++            self.last_tokens = None;
++            self.turn_hits = 0;
++        }
++    }
++
++    pub(super) fn account_changed(&mut self) {
++        self.scope = None;
++        self.samples.clear();
++        self.last_tokens = None;
++        self.turn_hits = 0;
++        self.route = None;
++        self.mismatch = None;
++        // Responses already in flight can still be billed to the prior login.
++        self.suspended = self.running;
++    }
++
++    fn observe_usage(&mut self, response_id: &str, usage: Option<&TokenUsageBreakdown>) {
++        if response_id.is_empty() || self.seen.iter().any(|id| id == response_id) {
++            return;
++        }
++        self.seen.push_back(response_id.to_owned());
++        if self.seen.len() > 64 {
++            self.seen.pop_front();
++        }
++        self.last_tokens = None;
++        let Some(usage) = usage else { return };
++        let tokens = usage.reasoning_output_tokens;
++        if tokens < 0
++            || tokens > usage.output_tokens
++            || usage.output_tokens > usage.total_tokens
++            || usage.total_tokens <= 0
++        {
++            return;
++        }
++        self.last_tokens = Some(tokens);
++        self.samples.push_back(tokens);
++        if self.samples.len() > 20 {
++            self.samples.pop_front();
++        }
++        self.turn_hits += usize::from(tokens == 516);
++    }
++
++    fn alert(&self) -> &'static str {
++        let high = self
++            .scope
++            .as_ref()
++            .and_then(|scope| scope.effort.as_deref())
++            .is_some_and(|effort| matches!(effort, "high" | "xhigh" | "max" | "ultra"));
++        if high
++            && self.samples.len() >= 5
++            && self
++                .samples
++                .iter()
++                .rev()
++                .take(5)
++                .filter(|&&n| n == 516)
++                .count()
++                >= 3
++        {
++            "suspect"
++        } else if high && self.turn_hits > 0 {
++            "watch"
++        } else {
++            "none"
++        }
++    }
++}
++
++impl ChatWidget {
++    fn model_guard_selected_scope(&self) -> Scope {
++        Scope {
++            model: self.current_model().to_owned(),
++            provider: self.config.model_provider_id.clone(),
++            effort: self
++                .current_reasoning_effort()
++                .map(|effort| effort.to_string()),
++            tier: self.effective_service_tier.clone(),
++        }
++    }
++
++    pub(super) fn restore_model_guard_turn(&mut self, turn: &Turn) {
++        if self.model_guard.is_none() {
++            return;
++        }
++        let scope = self.model_guard_selected_scope();
++        if let Some(guard) = self.model_guard.as_mut() {
++            if turn.status == TurnStatus::InProgress {
++                guard.start_turn(&turn.id, scope);
++            } else if guard.turn_id.as_ref() == Some(&turn.id) {
++                guard.running = false;
++            }
++        }
++    }
++
++    pub(super) fn observe_model_guard(
++        &mut self,
++        notification: &ServerNotification,
++        replay_kind: Option<ReplayKind>,
++    ) {
++        if self.model_guard.is_none()
++            || !matches!(
++                notification,
++                ServerNotification::TurnStarted(_)
++                    | ServerNotification::TurnCompleted(_)
++                    | ServerNotification::ModelRoutingUpdated(_)
++                    | ServerNotification::ModelRerouted(_)
++                    | ServerNotification::RawResponseCompleted(_)
++            )
++        {
++            return;
++        }
++        if replay_kind.is_some()
++            && !matches!(
++                notification,
++                ServerNotification::TurnStarted(_) | ServerNotification::TurnCompleted(_)
++            )
++        {
++            return;
++        }
++        let Some(thread) = self.thread_id.map(|id| id.to_string()) else {
++            return;
++        };
++        let current_scope = self.model_guard_selected_scope();
++        let Some(guard) = self.model_guard.as_mut() else {
++            return;
++        };
++        match notification {
++            ServerNotification::TurnStarted(n) if n.thread_id == thread => {
++                guard.start_turn(&n.turn.id, current_scope);
++            }
++            ServerNotification::TurnCompleted(n)
++                if n.thread_id == thread && guard.turn_id.as_ref() == Some(&n.turn.id) =>
++            {
++                guard.running = false;
++            }
++            ServerNotification::ModelRoutingUpdated(n)
++                if n.thread_id == thread
++                    && guard.turn_id.as_ref() == Some(&n.turn_id)
++                    && guard.running
++                    && !guard.suspended =>
++            {
++                guard.activate(Some(Scope {
++                    model: n.requested_model.clone(),
++                    provider: n.model_provider.clone(),
++                    effort: n.reasoning_effort.clone(),
++                    tier: n.service_tier.clone(),
++                }));
++                if let Some(actual) = n.server_model.as_ref()
++                    && !actual.eq_ignore_ascii_case(&n.requested_model)
++                {
++                    guard.mismatch = Some((n.requested_model.clone(), actual.clone()));
++                }
++                guard.route = Some(n.clone());
++            }
++            ServerNotification::ModelRerouted(n)
++                if n.thread_id == thread
++                    && guard.turn_id.as_ref() == Some(&n.turn_id)
++                    && guard.running
++                    && !guard.suspended =>
++            {
++                guard.mismatch = Some((n.from_model.clone(), n.to_model.clone()));
++            }
++            ServerNotification::RawResponseCompleted(n)
++                if n.thread_id == thread
++                    && guard.turn_id.as_ref() == Some(&n.turn_id)
++                    && guard.running
++                    && !guard.suspended =>
++            {
++                // An attached active request may have started before this UI
++                // subscribed. Do not guess its model/effort from current settings.
++                if guard.route.is_none() {
++                    guard.activate(None);
++                }
++                guard.observe_usage(&n.response_id, n.usage.as_ref());
++            }
++            _ => return,
++        }
++        self.refresh_status_line();
++        self.request_redraw();
++    }
++}
++
++#[path = "model_guard_display.rs"]
++mod display;
++
++#[cfg(test)]
++#[path = "model_guard_tests.rs"]
++mod tests;
+diff --git a/codex-rs/tui/src/chatwidget/model_guard_display.rs b/codex-rs/tui/src/chatwidget/model_guard_display.rs
+new file mode 100644
+index 0000000..744451c
+--- /dev/null
++++ b/codex-rs/tui/src/chatwidget/model_guard_display.rs
+@@ -0,0 +1,212 @@
++//! Native footer content and on-demand evidence details.
++use super::*;
++use ratatui::style::Color;
++
++impl ChatWidget {
++    pub(in crate::chatwidget) fn model_guard_lines(&self) -> Option<Vec<Line<'static>>> {
++        let guard = self.model_guard.as_ref()?;
++        let zh = guard.settings.language == "zh";
++        let running = guard.running && !guard.suspended;
++        let active = running.then_some(guard.route.as_ref()).flatten();
++        let (model, effort) = if let Some(route) = active {
++            (
++                route.requested_model.as_str(),
++                route.reasoning_effort.clone(),
++            )
++        } else {
++            (
++                self.current_model(),
++                self.current_reasoning_effort()
++                    .map(|effort| effort.to_string()),
++            )
++        };
++        let mut parts = vec![format!(
++            "{} {model}",
++            if active.is_some() {
++                if zh { "请求" } else { "request" }
++            } else if zh {
++                "已选"
++            } else {
++                "selected"
++            }
++        )];
++        if let Some(effort) = effort {
++            parts.push(effort);
++        }
++        if guard.settings.show_account {
++            if self.config.model_provider_id != "openai" {
++                parts.push(self.config.model_provider_id.clone());
++            } else if let Some(account) = self.status_account_display.as_ref() {
++                match account {
++                    StatusAccountDisplay::ChatGpt { email, plan } => {
++                        parts.extend(email.iter().cloned());
++                        parts.extend(plan.iter().cloned());
++                    }
++                    StatusAccountDisplay::ApiKey => parts.push("API key".into()),
++                }
++            }
++        }
++        if let Some(actual) = active.and_then(|route| route.server_model.as_deref())
++            && guard.mismatch.is_none()
++        {
++            parts.push(format!(
++                "{} {actual}",
++                if zh {
++                    "服务端披露"
++                } else {
++                    "server reported"
++                }
++            ));
++        }
++        let mut lines = vec![Line::from(format!(" {}", safe_label(&parts.join(" · ")))).dim()];
++        let previous = if running {
++            ""
++        } else if zh {
++            "上轮 · "
++        } else {
++            "last turn · "
++        };
++        let evidence_visible =
++            running || guard.turn_scope.as_ref() == Some(&self.model_guard_selected_scope());
++        let warning = if !evidence_visible {
++            None
++        } else if let Some((from, to)) = guard.mismatch.as_ref() {
++            Some(format!(
++                "{previous}{} {from} → {to}",
++                if zh { "路由变化" } else { "ROUTE DIFF" }
++            ))
++        } else if guard.alert() == "suspect" {
++            let hits = guard
++                .samples
++                .iter()
++                .rev()
++                .take(5)
++                .filter(|&&n| n == 516)
++                .count();
++            Some(if zh {
++                format!("{previous}推理异常信号：最近 5 次响应中有 {hits} 次为 516 tokens")
++            } else {
++                format!(
++                    "{previous}Reasoning anomaly signal: {hits} of the last 5 responses used 516 tokens"
++                )
++            })
++        } else {
++            None
++        };
++        if let Some(warning) = warning {
++            let style = if guard.mismatch.is_some() {
++                Style::default()
++                    .fg(Color::Rgb(255, 241, 242))
++                    .bg(Color::Rgb(127, 29, 29))
++            } else {
++                Style::default()
++                    .fg(Color::Rgb(254, 243, 199))
++                    .bg(Color::Rgb(78, 40, 0))
++            };
++            lines.push(Line::from(format!(" {}", safe_label(&warning))).style(style));
++        }
++        Some(lines)
++    }
++
++    pub(in crate::chatwidget) fn add_model_guard_details(&mut self) {
++        let Some(guard) = self.model_guard.as_ref() else {
++            return;
++        };
++        let zh = guard.settings.language == "zh";
++        let mut details: Vec<Line<'static>> = vec!["Model Guard".bold().into()];
++        if let Some(route) = guard.route.as_ref() {
++            details.push(
++                format!(
++                    "{}: {} · {}",
++                    if zh { "最近请求" } else { "Last request" },
++                    safe_label(&route.requested_model),
++                    safe_label(route.reasoning_effort.as_deref().unwrap_or("default"))
++                )
++                .into(),
++            );
++            if let Some(actual) = route.server_model.as_ref() {
++                details.push(
++                    format!(
++                        "{}: {}",
++                        if zh {
++                            "服务端披露"
++                        } else {
++                            "Server reported"
++                        },
++                        safe_label(actual)
++                    )
++                    .into(),
++                );
++            } else {
++                details.push(
++                    if zh {
++                        "本次响应没有提供有效模型标识。"
++                    } else {
++                        "This response did not disclose an effective model."
++                    }
++                    .into(),
++                );
++            }
++        } else {
++            details.push(
++                if zh {
++                    "尚无本会话的实时路由观测。"
++                } else {
++                    "No live routing observation for this session yet."
++                }
++                .into(),
++            );
++        }
++        if let Some((from, to)) = guard.mismatch.as_ref() {
++            details.push(
++                format!(
++                    "{}: {} → {}",
++                    if zh {
++                        "本轮曾披露"
++                    } else {
++                        "Disclosed earlier this turn"
++                    },
++                    safe_label(from),
++                    safe_label(to)
++                )
++                .into(),
++            );
++        }
++        if let Some(tokens) = guard.last_tokens {
++            details.push(
++                format!(
++                    "{}: {tokens} tokens",
++                    if zh {
++                        "上次推理用量"
++                    } else {
++                        "Last reasoning usage"
++                    }
++                )
++                .into(),
++            );
++        }
++        let count = guard.samples.len();
++        let hits = guard.samples.iter().filter(|&&n| n == 516).count();
++        details.push(if zh {
++            format!("最近 {count} 次有效响应中，{hits} 次恰好为 516 个推理 tokens。")
++        } else {
++            format!("{hits} of the last {count} measured responses used exactly 516 reasoning tokens.")
++        }.into());
++        details.push(if zh {
++            "516 是辅助异常信号；服务端标识和用量均不能独立证明底层模型权重。"
++        } else {
++            "516 is an auxiliary signal. Server labels and usage do not attest the underlying weights."
++        }.dim().into());
++        self.add_to_history(PlainHistoryCell::new(details));
++    }
++}
++
++fn safe_label(value: &str) -> String {
++    value
++        .chars()
++        .filter(|c| {
++            !c.is_control() && !matches!(*c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
++        })
++        .take(512)
++        .collect()
++}
+diff --git a/codex-rs/tui/src/chatwidget/protocol.rs b/codex-rs/tui/src/chatwidget/protocol.rs
+index 48083eb..f31045a 100644
+--- a/codex-rs/tui/src/chatwidget/protocol.rs
++++ b/codex-rs/tui/src/chatwidget/protocol.rs
+@@ -15,6 +15,8 @@ impl ChatWidget {
+             return;
+         }
+ 
++        self.observe_model_guard(&notification, replay_kind);
++
+         let was_replaying_turn_completion = self.thread_usage.replaying_turn_completion;
+         self.thread_usage.replaying_turn_completion = replay_kind.is_some();
+         let from_replay = replay_kind.is_some();
+@@ -145,7 +147,7 @@ impl ChatWidget {
+             ServerNotification::SkillsChanged(_) => {
+                 self.refresh_skills_for_current_cwd(/*force_reload*/ true);
+             }
+-            ServerNotification::ModelRerouted(_) => {}
++            ServerNotification::ModelRerouted(_) | ServerNotification::ModelRoutingUpdated(_) => {}
+             ServerNotification::ModelVerification(notification) => {
+                 self.on_app_server_model_verification(&notification.verifications)
+             }
+diff --git a/codex-rs/tui/src/chatwidget/rendering.rs b/codex-rs/tui/src/chatwidget/rendering.rs
+index 693ede4..51b9df0 100644
+--- a/codex-rs/tui/src/chatwidget/rendering.rs
++++ b/codex-rs/tui/src/chatwidget/rendering.rs
+@@ -76,6 +76,17 @@ impl ChatWidget {
+                     /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+                 )),
+         );
++        if let Some(lines) = self.model_guard_lines()
++            && lines.len() > 1
++        {
++            flex.push(
++                /*flex*/ 0,
++                RenderableItem::Owned(Box::new(
++                    Paragraph::new(lines.into_iter().skip(1).collect::<Vec<_>>())
++                        .wrap(ratatui::widgets::Wrap { trim: false }),
++                )),
++            );
++        }
+         RenderableItem::Owned(Box::new(flex))
+     }
+ 
+diff --git a/codex-rs/tui/src/chatwidget/replay.rs b/codex-rs/tui/src/chatwidget/replay.rs
+index cb2c8d8..59f3abe 100644
+--- a/codex-rs/tui/src/chatwidget/replay.rs
++++ b/codex-rs/tui/src/chatwidget/replay.rs
+@@ -18,6 +18,9 @@ impl ChatWidget {
+             }))
+             .collect::<Vec<_>>();
+         for (turn, hidden_nested_review_turn) in turns.into_iter().zip(hidden_nested_review_turns) {
++            if !hidden_nested_review_turn {
++                self.restore_model_guard_turn(&turn);
++            }
+             let Turn {
+                 id: turn_id,
+                 items_view: _,
+diff --git a/codex-rs/tui/src/chatwidget/settings.rs b/codex-rs/tui/src/chatwidget/settings.rs
+index 74d3e7f..c0a5229 100644
+--- a/codex-rs/tui/src/chatwidget/settings.rs
++++ b/codex-rs/tui/src/chatwidget/settings.rs
+@@ -242,6 +242,9 @@ impl ChatWidget {
+         self.status_line_workspace_headline_last_requested_at = None;
+         self.status_line_workspace_messages_disabled = false;
+         self.clear_thread_usage_state();
++        if let Some(guard) = self.model_guard.as_mut() {
++            guard.account_changed();
++        }
+         self.status_account_display = status_account_display;
+         self.plan_type = plan_type;
+         self.has_chatgpt_account = has_chatgpt_account;
+diff --git a/codex-rs/tui/src/chatwidget/slash_dispatch.rs b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
+index 7f2028f..f563007 100644
+--- a/codex-rs/tui/src/chatwidget/slash_dispatch.rs
++++ b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
+@@ -473,6 +473,7 @@ impl ChatWidget {
+                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
+                     );
+                 }
++                self.add_model_guard_details();
+             }
+             SlashCommand::Cd => {
+                 self.dispatch_command_with_args(SlashCommand::Cd, "~".to_string(), Vec::new());
+diff --git a/codex-rs/tui/src/chatwidget/status_surfaces.rs b/codex-rs/tui/src/chatwidget/status_surfaces.rs
+index e79c0d3..8e056b3 100644
+--- a/codex-rs/tui/src/chatwidget/status_surfaces.rs
++++ b/codex-rs/tui/src/chatwidget/status_surfaces.rs
+@@ -213,10 +213,25 @@ impl ChatWidget {
+             }
+         }
+ 
+-        self.set_status_line(status_line_from_segments(
+-            segments,
+-            self.config.tui_status_line_use_colors,
+-        ));
++        let line = if let Some(mut guard_lines) = self.model_guard_lines() {
++            let mut line = guard_lines.remove(0);
++            segments.retain(|(item, _)| {
++                !matches!(
++                    item,
++                    StatusLineItem::ModelName | StatusLineItem::ModelWithReasoning
++                )
++            });
++            if let Some(extra) =
++                status_line_from_segments(segments, self.config.tui_status_line_use_colors)
++            {
++                line.spans.push(" · ".dim());
++                line.spans.extend(extra.spans);
++            }
++            Some(line)
++        } else {
++            status_line_from_segments(segments, self.config.tui_status_line_use_colors)
++        };
++        self.set_status_line(line);
+         let hyperlink_url = selections
+             .status_line_items
+             .contains(&StatusLineItem::PullRequestNumber)

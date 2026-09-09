@@ -1,0 +1,4 @@
+# Development-only terminal emulator, plus the pinned runtime dependency.
+-r ../requirements.lock
+pyte==0.8.2 --hash=sha256:85db42a35798a5aafa96ac4d8da78b090b2c933248819157fc0e6f78876a0135
+wcwidth==0.8.3 --hash=sha256:d5b73dba6158a595ec9370350e7f2637bcac8d6c5e4fde34f30fcffb6103a5e4

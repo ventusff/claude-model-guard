@@ -1,0 +1,476 @@
+diff --git a/codex-rs/app-server-protocol/src/protocol/common.rs b/codex-rs/app-server-protocol/src/protocol/common.rs
+index 6c00f88..1ec3c6e 100644
+--- a/codex-rs/app-server-protocol/src/protocol/common.rs
++++ b/codex-rs/app-server-protocol/src/protocol/common.rs
+@@ -1916,6 +1916,8 @@ server_notification_definitions! {
+     /// Deprecated: Use `ContextCompaction` item type instead.
+     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
+     ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
++    #[experimental("model/routing/updated")]
++    ModelRoutingUpdated => "model/routing/updated" (v2::ModelRoutingUpdatedNotification),
+     ModelVerification => "model/verification" (v2::ModelVerificationNotification),
+     AuthRecoveryStarted => "modelProvider/authRecoveryStarted" (v2::AuthRecoveryNotification),
+     AuthRecoveryCompleted => "modelProvider/authRecoveryCompleted" (v2::AuthRecoveryNotification),
+diff --git a/codex-rs/app-server-protocol/src/protocol/v2/model.rs b/codex-rs/app-server-protocol/src/protocol/v2/model.rs
+index f59451e..0d831fc 100644
+--- a/codex-rs/app-server-protocol/src/protocol/v2/model.rs
++++ b/codex-rs/app-server-protocol/src/protocol/v2/model.rs
+@@ -162,6 +162,21 @@ pub struct ModelReroutedNotification {
+     pub reason: ModelRerouteReason,
+ }
+ 
++/// Sampling metadata; a null server model does not verify the backend's identity.
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
++#[serde(rename_all = "camelCase")]
++#[ts(export_to = "v2/")]
++pub struct ModelRoutingUpdatedNotification {
++    pub thread_id: String,
++    pub turn_id: String,
++    pub request_id: String,
++    pub requested_model: String,
++    pub server_model: Option<String>,
++    pub model_provider: String,
++    pub reasoning_effort: Option<String>,
++    pub service_tier: Option<String>,
++}
++
+ #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+ #[serde(rename_all = "camelCase")]
+ #[ts(export_to = "v2/")]
+diff --git a/codex-rs/app-server/src/bespoke_event_handling.rs b/codex-rs/app-server/src/bespoke_event_handling.rs
+index 91cda28..3b4bd5f 100644
+--- a/codex-rs/app-server/src/bespoke_event_handling.rs
++++ b/codex-rs/app-server/src/bespoke_event_handling.rs
+@@ -410,6 +410,21 @@ pub(crate) async fn apply_bespoke_event_handling(
+                 .send_server_notification(ServerNotification::ModelRerouted(notification))
+                 .await;
+         }
++        EventMsg::ModelRouting(event) => {
++            let notification = codex_app_server_protocol::ModelRoutingUpdatedNotification {
++                thread_id: conversation_id.to_string(),
++                turn_id: event_turn_id.clone(),
++                request_id: event.request_id,
++                requested_model: event.requested_model,
++                server_model: event.server_model,
++                model_provider: event.model_provider,
++                reasoning_effort: event.reasoning_effort,
++                service_tier: event.service_tier,
++            };
++            outgoing
++                .send_server_notification(ServerNotification::ModelRoutingUpdated(notification))
++                .await;
++        }
+         EventMsg::ModelVerification(event) => {
+             let notification = ModelVerificationNotification {
+                 thread_id: conversation_id.to_string(),
+diff --git a/codex-rs/app-server/src/notification_media.rs b/codex-rs/app-server/src/notification_media.rs
+index 844a312..2c04527 100644
+--- a/codex-rs/app-server/src/notification_media.rs
++++ b/codex-rs/app-server/src/notification_media.rs
+@@ -108,6 +108,7 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
+         | ServerNotification::ReasoningTextDelta(_)
+         | ServerNotification::ContextCompacted(_)
+         | ServerNotification::ModelRerouted(_)
++        | ServerNotification::ModelRoutingUpdated(_)
+         | ServerNotification::ModelVerification(_)
+         | ServerNotification::AuthRecoveryStarted(_)
+         | ServerNotification::AuthRecoveryCompleted(_)
+diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
+index 9f03c93..2c64f4c 100644
+--- a/codex-rs/core/src/client.rs
++++ b/codex-rs/core/src/client.rs
+@@ -121,6 +121,8 @@ use crate::attestation::X_OAI_ATTESTATION_HEADER;
+ use crate::client_common::Prompt;
+ use crate::client_common::ResponseEvent;
+ use crate::client_common::ResponseStream;
++#[path = "client_routing.rs"]
++mod routing;
+ use crate::context::BaseInstructionsFragment;
+ use crate::context::ContextualUserFragment;
+ use crate::cyber_access_program;
+@@ -296,6 +298,7 @@ pub struct ModelClient {
+     prompt_cache_key_override: Option<String>,
+     free_guardian_enabled: bool,
+     event_sender: Option<Sender<ProtocolEvent>>,
++    model_provider_id: Option<String>,
+     http_client_factory: HttpClientFactory,
+ }
+ 
+@@ -518,6 +521,7 @@ impl ModelClient {
+             prompt_cache_key_override: None,
+             free_guardian_enabled: false,
+             event_sender: None,
++            model_provider_id: None,
+             http_client_factory,
+         }
+     }
+@@ -531,9 +535,11 @@ impl ModelClient {
+         mut self,
+         prompt_cache_key_override: Option<String>,
+         event_sender: Sender<ProtocolEvent>,
++        model_provider_id: String,
+     ) -> Self {
+         self.prompt_cache_key_override = prompt_cache_key_override;
+         self.event_sender = Some(event_sender);
++        self.model_provider_id = Some(model_provider_id);
+         self
+     }
+ 
+@@ -1647,16 +1653,21 @@ impl ModelClientSession {
+             )
+             .with_endpoint(endpoint)
+             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
++            let request_metadata = self
++                .client
++                .begin_model_request(&request, responses_metadata)
++                .await;
+             let stream_result = client.stream_request(request, options).await;
+ 
+             match stream_result {
+                 Ok(stream) => {
+-                    let (stream, _) = map_response_stream(
++                    let (mut stream, _) = map_response_stream(
+                         stream,
+                         request_session_telemetry,
+                         inference_trace_attempt,
+                         Arc::clone(&self.client.state.provider),
+                     );
++                    stream.request_metadata = request_metadata;
+                     return Ok(stream);
+                 }
+                 Err(ApiError::Transport(unauthorized_transport))
+@@ -1881,6 +1892,13 @@ impl ModelClientSession {
+                         "websocket connection is unavailable".to_string(),
+                     ))
+                 })?;
++            let request_metadata = if warmup {
++                None
++            } else {
++                self.client
++                    .begin_model_request(&request, responses_metadata)
++                    .await
++            };
+             let stream_result = websocket_connection
+                 .stream_request(
+                     ws_request,
+@@ -1905,12 +1923,13 @@ impl ModelClientSession {
+                 );
+                 err
+             })?;
+-            let (stream, last_request_rx) = map_response_stream(
++            let (mut stream, last_request_rx) = map_response_stream(
+                 stream_result,
+                 request_session_telemetry,
+                 inference_trace_attempt,
+                 Arc::clone(&self.client.state.provider),
+             );
++            stream.request_metadata = request_metadata;
+             self.websocket_session.last_response_rx = Some(last_request_rx);
+             return Ok(WebsocketStreamOutcome::Stream(stream));
+         }
+@@ -2304,6 +2323,7 @@ where
+ 
+     (
+         ResponseStream {
++            request_metadata: None,
+             rx_event,
+             consumer_dropped: consumer_dropped_for_stream,
+         },
+diff --git a/codex-rs/core/src/client_common.rs b/codex-rs/core/src/client_common.rs
+index f2d6be2..e9247ed 100644
+--- a/codex-rs/core/src/client_common.rs
++++ b/codex-rs/core/src/client_common.rs
+@@ -106,6 +106,7 @@ fn strip_image_details(items: &mut [ResponseItem]) {
+ }
+ 
+ pub struct ResponseStream {
++    pub(crate) request_metadata: Option<codex_protocol::protocol::ModelRoutingEvent>,
+     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
+     /// Signals the mapper task that the consumer stopped polling before the
+     /// provider stream reached its own terminal event.
+diff --git a/codex-rs/core/src/client_routing.rs b/codex-rs/core/src/client_routing.rs
+new file mode 100644
+index 0000000..e816b8f
+--- /dev/null
++++ b/codex-rs/core/src/client_routing.rs
+@@ -0,0 +1,37 @@
++//! Allowlisted routing metadata copied from the final outgoing request.
++use super::*;
++use codex_protocol::protocol::ModelRoutingEvent;
++
++impl ModelClient {
++    pub(super) async fn begin_model_request(
++        &self,
++        request: &ResponsesApiRequest,
++        metadata: &CodexResponsesMetadata,
++    ) -> Option<ModelRoutingEvent> {
++        let turn_id = metadata.turn_id.as_ref()?;
++        let model_provider = self.model_provider_id.as_ref()?;
++        let routing = ModelRoutingEvent {
++            request_id: Uuid::new_v4().to_string(),
++            requested_model: request.model.clone(),
++            server_model: None,
++            model_provider: model_provider.clone(),
++            reasoning_effort: request
++                .reasoning
++                .as_ref()
++                .and_then(|reasoning| reasoning.effort.as_ref())
++                .map(ToString::to_string),
++            service_tier: request.service_tier.clone(),
++        };
++        // Invalidate the previous disclosure before network I/O, including a
++        // transport retry. No request body, credentials or response text is sent.
++        if let Some(sender) = self.event_sender.as_ref() {
++            let _ = sender
++                .send(ProtocolEvent {
++                    id: turn_id.clone(),
++                    msg: EventMsg::ModelRouting(routing.clone()),
++                })
++                .await;
++        }
++        Some(routing)
++    }
++}
+diff --git a/codex-rs/core/src/compact_remote_v2.rs b/codex-rs/core/src/compact_remote_v2.rs
+index 68e2eae..c87a85b 100644
+--- a/codex-rs/core/src/compact_remote_v2.rs
++++ b/codex-rs/core/src/compact_remote_v2.rs
+@@ -811,6 +811,7 @@ mod tests {
+         }
+         drop(tx_event);
+         ResponseStream {
++            request_metadata: None,
+             rx_event,
+             consumer_dropped: CancellationToken::new(),
+         }
+diff --git a/codex-rs/core/src/session/session.rs b/codex-rs/core/src/session/session.rs
+index 6d1953e..767af84 100644
+--- a/codex-rs/core/src/session/session.rs
++++ b/codex-rs/core/src/session/session.rs
+@@ -1474,6 +1474,7 @@ impl Session {
+                         session_configuration.parent_thread_id,
+                     ),
+                     tx_event.clone(),
++                    config.model_provider_id.clone(),
+                 ),
+                 executed_tool_calls: executed_tool_calls.clone(),
+                 code_mode_service: crate::tools::code_mode::CodeModeService::new(
+diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
+index f7c4268..d275d5c 100644
+--- a/codex-rs/core/src/session/turn.rs
++++ b/codex-rs/core/src/session/turn.rs
+@@ -1828,6 +1828,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
+         | EventMsg::RealtimeConversationRealtime(_)
+         | EventMsg::RealtimeConversationClosed(_)
+         | EventMsg::ModelReroute(_)
++        | EventMsg::ModelRouting(_)
+         | EventMsg::ModelVerification(_)
+         | EventMsg::TurnModerationMetadata(_)
+         | EventMsg::SafetyBuffering(_)
+@@ -2270,6 +2271,7 @@ async fn try_run_sampling_request(
+         .instrument(trace_span!("stream_request"))
+         .or_cancel(&cancellation_token)
+         .await??;
++    let mut routing = stream.request_metadata.take();
+     let mut in_flight: FuturesOrdered<InFlightFuture<'static>> = FuturesOrdered::new();
+     let mut needs_follow_up = false;
+     let mut last_agent_message: Option<String> = None;
+@@ -2534,6 +2536,11 @@ async fn try_run_sampling_request(
+                 }
+             }
+             ResponseEvent::ServerModel(server_model) => {
++                if let Some(routing) = routing.as_mut() {
++                    routing.server_model = Some(server_model.clone());
++                    sess.send_event(&turn_context, EventMsg::ModelRouting(routing.clone()))
++                        .await;
++                }
+                 if !turn_context
+                     .server_model_warning_emitted
+                     .load(Ordering::Relaxed)
+diff --git a/codex-rs/core/tests/suite/mod.rs b/codex-rs/core/tests/suite/mod.rs
+index 8d43ca0..27934a4 100644
+--- a/codex-rs/core/tests/suite/mod.rs
++++ b/codex-rs/core/tests/suite/mod.rs
+@@ -103,6 +103,7 @@ mod mcp_tool_cache;
+ mod mcp_tool_exposure;
+ mod mcp_turn_metadata;
+ mod model_overrides;
++mod model_routing;
+ mod model_runtime_selectors;
+ mod model_switching;
+ mod model_visible_layout;
+diff --git a/codex-rs/core/tests/suite/model_routing.rs b/codex-rs/core/tests/suite/model_routing.rs
+new file mode 100644
+index 0000000..9b9dd08
+--- /dev/null
++++ b/codex-rs/core/tests/suite/model_routing.rs
+@@ -0,0 +1,90 @@
++//! Routing disclosures are metadata, not a model identity attestation.
++use anyhow::Result;
++use codex_core::TurnInputRequest;
++use codex_protocol::openai_models::ReasoningEffort;
++use codex_protocol::protocol::EventMsg;
++use codex_protocol::user_input::UserInput;
++use core_test_support::responses::ev_completed;
++use core_test_support::responses::mount_response_once;
++use core_test_support::responses::sse;
++use core_test_support::responses::sse_response;
++use core_test_support::responses::start_mock_server;
++use core_test_support::test_codex::test_codex;
++use core_test_support::wait_for_event;
++use pretty_assertions::assert_eq;
++use test_case::test_case;
++
++#[test_case(None, ReasoningEffort::Max; "missing disclosure stays unverified even with a body model")]
++#[test_case(Some("gpt-6-astra"), ReasoningEffort::Max; "matching header is disclosed")]
++#[test_case(Some("gpt-4o"), ReasoningEffort::Max; "different header is disclosed")]
++#[test_case(None, ReasoningEffort::Ultra; "ultra metadata follows the wire request")]
++#[test_case(None, ReasoningEffort::Persistent; "persistent metadata follows the wire request")]
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn model_routing_reports_only_effective_transport_metadata(
++    header: Option<&str>,
++    effort: ReasoningEffort,
++) -> Result<()> {
++    let server = start_mock_server().await;
++    let body = sse(vec![
++        serde_json::json!({"type":"response.created", "response":{"id":"routing-response", "model":"gpt-4o"}}),
++        ev_completed("routing-response"),
++    ]);
++    let response = match header {
++        Some(header) => sse_response(body).insert_header("OpenAI-Model", header),
++        None => sse_response(body),
++    };
++    let mock = mount_response_once(&server, response).await;
++    let mut builder = test_codex()
++        .with_model("gpt-6-astra")
++        .with_config(move |config| {
++            config.model_reasoning_effort = Some(effort);
++            config.service_tier = Some("default".into());
++        });
++    let test = builder.build_with_auto_env(&server).await?;
++    test.codex
++        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
++            text: "Reply OK without tools.".into(),
++            text_elements: Vec::new(),
++        }]))
++        .await?;
++    let mut routing = Vec::new();
++    loop {
++        match wait_for_event(&test.codex, |_| true).await {
++            EventMsg::ModelRouting(metadata) => routing.push(metadata),
++            EventMsg::TurnComplete(_) => break,
++            _ => {}
++        }
++    }
++    let first = routing.first().expect("sampling request metadata");
++    assert_eq!(
++        (&first.requested_model, first.server_model.as_ref()),
++        (&"gpt-6-astra".to_string(), None)
++    );
++    assert!(!first.request_id.is_empty());
++    let expected: Vec<_> = std::iter::once(None)
++        .chain(header.map(|value| Some(value.to_string())))
++        .collect();
++    assert_eq!(
++        routing
++            .iter()
++            .map(|r| r.server_model.clone())
++            .collect::<Vec<_>>(),
++        expected
++    );
++    assert!(routing.iter().all(|r| r.request_id == first.request_id));
++    let request = mock.single_request().body_json();
++    assert_eq!(
++        first.requested_model,
++        request["model"].as_str().expect("request model")
++    );
++    assert_eq!(
++        first.reasoning_effort.as_deref(),
++        request["reasoning"]["effort"].as_str()
++    );
++    assert_eq!(
++        first.service_tier.as_deref(),
++        request["service_tier"].as_str()
++    );
++    assert_eq!(first.service_tier, None);
++    Ok(())
++}
+diff --git a/codex-rs/mcp-server/src/codex_tool_runner.rs b/codex-rs/mcp-server/src/codex_tool_runner.rs
+index fdc32c3..d6cc1ac 100644
+--- a/codex-rs/mcp-server/src/codex_tool_runner.rs
++++ b/codex-rs/mcp-server/src/codex_tool_runner.rs
+@@ -358,6 +358,7 @@ async fn run_codex_tool_session_inner(
+                     | EventMsg::DynamicToolCallResponse(_)
+                     | EventMsg::ContextCompacted(_)
+                     | EventMsg::ModelReroute(_)
++                    | EventMsg::ModelRouting(_)
+                     | EventMsg::ThreadRolledBack(_)
+                     | EventMsg::CollabAgentSpawnBegin(_)
+                     | EventMsg::CollabAgentSpawnEnd(_)
+diff --git a/codex-rs/protocol/src/protocol.rs b/codex-rs/protocol/src/protocol.rs
+index ae2107b..1799e76 100644
+--- a/codex-rs/protocol/src/protocol.rs
++++ b/codex-rs/protocol/src/protocol.rs
+@@ -1385,6 +1385,9 @@ pub enum EventMsg {
+     /// Model routing changed from the requested model to a different model.
+     ModelReroute(ModelRerouteEvent),
+ 
++    /// Per-request routing disclosure, independent of account verification policy.
++    ModelRouting(ModelRoutingEvent),
++
+     /// Backend recommends additional account verification for this turn.
+     ModelVerification(ModelVerificationEvent),
+ 
+@@ -2108,6 +2111,20 @@ pub struct ModelRerouteEvent {
+     pub reason: ModelRerouteReason,
+ }
+ 
++/// Metadata for one sampling request. A missing server model is unverified.
++///
++/// `server_model` only comes from the transport's effective-model disclosure,
++/// never from response text, the requested model, or the response body's label.
++#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
++pub struct ModelRoutingEvent {
++    pub request_id: String,
++    pub requested_model: String,
++    pub server_model: Option<String>,
++    pub model_provider: String,
++    pub reasoning_effort: Option<String>,
++    pub service_tier: Option<String>,
++}
++
+ #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+ #[serde(rename_all = "snake_case")]
+ #[ts(rename_all = "snake_case")]
+diff --git a/codex-rs/rollout-trace/src/protocol_event.rs b/codex-rs/rollout-trace/src/protocol_event.rs
+index dadc4bb..662c32f 100644
+--- a/codex-rs/rollout-trace/src/protocol_event.rs
++++ b/codex-rs/rollout-trace/src/protocol_event.rs
+@@ -372,6 +372,7 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
+         | EventMsg::RealtimeConversationClosed(_)
+         | EventMsg::RealtimeConversationSdp(_)
+         | EventMsg::ModelReroute(_)
++        | EventMsg::ModelRouting(_)
+         | EventMsg::ModelVerification(_)
+         | EventMsg::TurnModerationMetadata(_)
+         | EventMsg::ContextCompacted(_)
+@@ -453,6 +454,7 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
+         | EventMsg::RealtimeConversationClosed(_)
+         | EventMsg::RealtimeConversationSdp(_)
+         | EventMsg::ModelReroute(_)
++        | EventMsg::ModelRouting(_)
+         | EventMsg::ModelVerification(_)
+         | EventMsg::TurnModerationMetadata(_)
+         | EventMsg::ContextCompacted(_)
+diff --git a/codex-rs/rollout/src/policy.rs b/codex-rs/rollout/src/policy.rs
+index cc54ac5..6f30011 100644
+--- a/codex-rs/rollout/src/policy.rs
++++ b/codex-rs/rollout/src/policy.rs
+@@ -158,6 +158,7 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode)
+         | EventMsg::RealtimeConversationClosed(_)
+         | EventMsg::SafetyBuffering(_)
+         | EventMsg::ModelReroute(_)
++        | EventMsg::ModelRouting(_)
+         | EventMsg::ModelVerification(_)
+         | EventMsg::TurnModerationMetadata(_)
+         | EventMsg::AgentReasoningSectionBreak(_)

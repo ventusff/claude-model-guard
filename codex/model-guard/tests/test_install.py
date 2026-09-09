@@ -1,87 +1,93 @@
-"""Verify shell activation and reversible installation with isolated user homes."""
-
+import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from model_guard.install import install, remove, replace_block, shell_block
+from model_guard import __version__
+from model_guard.install import install, remove, replace_block, shell_block, link, legacy_launcher
 
 
 class InstallTests(unittest.TestCase):
-    @unittest.skipUnless(shutil.which("fish"), "Fish is not installed")
-    def test_fish_resolves_guard_once_and_restores_official_after_removal(self):
-        with tempfile.TemporaryDirectory() as temp:
-            home = Path(temp)
-            root = home / "a path with 'quotes' and \\backslashes"
-            official = home / "official"
-            for directory in (root / "bin", official):
-                directory.mkdir(parents=True)
-                (directory / "codex").write_text("#!/bin/sh\nexit 0\n")
-                (directory / "codex").chmod(0o755)
+    def test_native_activation_survives_existing_shell_and_removal_preserves_user_edits(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            root, source = home / "guard", home / "source"
+            real_root = home / "actual-guard"
+            real_root.mkdir(); root.symlink_to(real_root, target_is_directory=True)
+            (source / "native").mkdir(parents=True)
+            official = home / "official-codex"
+            official.write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo "codex-cli 0.153.4"; else printf "stock:%s\\n" "$@"; fi\n')
+            official.chmod(0o755)
+            entry = home / "bin/codex"
+            entry.parent.mkdir(); entry.symlink_to(official)
+            package = home / "package/bin"
+            package.mkdir(parents=True)
+            native = package / "codex"
+            native.write_text(f'#!/bin/sh\nif [ "$1" = --version ]; then echo "codex-cli 0.153.4+model-guard.{__version__}"; else printf "native:%s\\n" "$@"; fi\n')
+            native.chmod(0o755)
+            archive = home / "native.tar.gz"
+            with tarfile.open(archive, "w:gz") as bundle:
+                bundle.add(native, arcname="bin/codex")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            (source / "native/release.json").write_text(json.dumps({"sha256": digest, "codex_version": "0.153.4", "upstream_commit": "fixture"}))
             rc = home / "config.fish"
-            original = "# user's settings\nset -gx EDITOR vim\n"
-            rc.write_text(replace_block(original, shell_block(root, fish=True)))
-            env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / "config"),
-                       GUARD_TEST_RC=str(rc), GUARD_TEST_BIN=str(root / "bin"),
-                       GUARD_ORIGINAL_BIN=str(official))
-            script = ('set -gx PATH "$GUARD_ORIGINAL_BIN" /usr/bin /bin "$GUARD_TEST_BIN"; '
-                      'source "$GUARD_TEST_RC"; source "$GUARD_TEST_RC"; '
-                      'command -v codex; printf "%s\\n" $PATH; '
-                      'set -q -U fish_user_paths; and echo unexpected_universal; true')
-            result = subprocess.run([shutil.which("fish"), "--no-config", "-c", script],
-                                    env=env, capture_output=True, text=True, check=True)
-            self.assertEqual(result.stdout.splitlines()[0], str(root / "bin/codex"))
-            self.assertEqual(result.stdout.splitlines()[1:].count(str(root / "bin")), 1)
-            self.assertNotIn("unexpected_universal", result.stdout)
-            self.assertEqual(result.stderr, "")
-            atomic_state = {"version": "test", "shell_files": [str(rc)]}
-            (root / "install.json").write_text(json.dumps(atomic_state))
-            (root / "bin/codex").write_text("# model-guard-codex managed launcher\n")
-            rc.write_text(rc.read_text() + "set -gx AFTER_INSTALL kept\n")
-            with patch.dict(os.environ, {"MODEL_GUARD_CODEX_HOME": str(root)}):
-                self.assertEqual(remove(), 0)
-            self.assertEqual(rc.read_text(), original + "set -gx AFTER_INSTALL kept\n")
-            result = subprocess.run([shutil.which("fish"), "--no-config", "-c", script],
-                                    env=env, capture_output=True, text=True, check=True)
-            self.assertEqual(result.stdout.splitlines()[0], str(official / "codex"))
+            rc.write_text(replace_block("# before\n", shell_block(root, fish=True)) + "# user's later edit\n")
+            (root / "install.json").write_text(json.dumps({"shell_files": [str(rc)]}))
+            (root / "bin").mkdir()
+            legacy = root / "bin/model-guard-codex"
+            legacy.write_text(legacy_launcher(root, "model-guard-codex"))
+            legacy.chmod(0o755)
+            legacy_codex = root / "bin/codex"
+            legacy_codex.write_text(legacy_launcher(root, "codex"))
+            legacy_codex.chmod(0o755)
+            real_run = subprocess.run
+            actual_check_output = subprocess.check_output
+            with patch.dict(os.environ, {"MODEL_GUARD_CODEX_HOME": str(root)}), patch("model_guard.install.venv.create"), patch("model_guard.install.subprocess.run", side_effect=lambda args, **kw: None if "pip" in args else real_run(args, **kw)):
+                for _ in range(2):
+                    state_before = (root / "install.json").read_text()
+                    entry_before = os.readlink(entry)
+                    rc_before = rc.read_text()
+                    launcher_before = legacy_codex.read_text() if legacy_codex.exists() else None
+                    def fail_activation(path, target):
+                        if path == entry:
+                            raise OSError("simulated final activation failure")
+                        return link(path, target)
+                    with patch("model_guard.install.link", side_effect=fail_activation), self.assertRaises(OSError):
+                        install(source, "zh", archive, entry)
+                    self.assertEqual(json.loads((root / "install.json").read_text()), json.loads(state_before))
+                    self.assertEqual(os.readlink(entry), entry_before)
+                    self.assertEqual(rc.read_text(), rc_before)
+                    self.assertEqual(legacy_codex.read_text() if legacy_codex.exists() else None, launcher_before)
+                    if launcher_before is not None:
+                        manual_target = home / "must-not-be-created"
+                        def concurrent_edit(path, target):
+                            if path == entry:
+                                legacy_codex.symlink_to(manual_target)
+                                (root / "install.json").write_text('{"manual_edit": true}')
+                                raise OSError("simulated concurrent manual edit")
+                            return link(path, target)
+                        with patch("model_guard.install.link", side_effect=concurrent_edit), self.assertRaises(OSError):
+                            install(source, "zh", archive, entry)
+                        self.assertTrue(legacy_codex.is_symlink())
+                        self.assertFalse(manual_target.exists())
+                        self.assertEqual(json.loads((root / "install.json").read_text()), {"manual_edit": True})
+                        legacy_codex.unlink()
+                        legacy_codex.write_text(launcher_before)
+                        legacy_codex.chmod(0o755)
+                        (root / "install.json").write_text(state_before)
+                    install(source, "zh", archive, entry)
+                    self.assertEqual(os.readlink(entry), json.loads((root / "install.json").read_text())["native_binary"])
+                self.assertEqual(actual_check_output([str(entry), "resume", "--last"], text=True), "native:resume\nnative:--last\n")
+                self.assertEqual(rc.read_text(), "# before\n# user's later edit\n")
+                remove()
+            self.assertEqual(os.readlink(entry), str(official))
+            self.assertEqual(actual_check_output([str(entry), "resume", "--last"], text=True), "stock:resume\nstock:--last\n")
 
-    def test_install_and_remove_fish_with_xdg_symlink_and_existing_edits(self):
-        for existing in (False, True):
-            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as temp:
-                home = Path(temp)
-                root = home / "guard"
-                xdg = home / "custom-config"
-                rc = xdg / "fish/config.fish"
-                target = home / "fish-dotfile"
-                if existing:
-                    rc.parent.mkdir(parents=True)
-                    target.write_text("set -gx EDITOR vim\n")
-                    target.chmod(0o600)
-                    rc.symlink_to(target)
-                env = {"MODEL_GUARD_CODEX_HOME": str(root), "XDG_CONFIG_HOME": str(xdg),
-                       "SHELL": "/bin/bash" if existing else "/usr/bin/fish"}
-                with patch.dict(os.environ, env), patch("pathlib.Path.home", return_value=home), \
-                     patch("model_guard.install.shutil.which", return_value="/fake/tool"), \
-                     patch("model_guard.install.venv.create"), patch("model_guard.install.subprocess.run"):
-                    self.assertEqual(install(home / "source"), 0)
-                    before = rc.read_text()
-                    self.assertEqual(install(home / "source"), 0)
-                    self.assertEqual(rc.read_text(), before)
-                    self.assertIn("fish_add_path --path --move", before)
-                    self.assertIn(str(rc), json.loads((root / "install.json").read_text())["shell_files"])
-                    rc.write_text(before + "set -gx NEW_SETTING kept\n")
-                    self.assertEqual(remove(), 0)
-                expected = ("set -gx EDITOR vim\n" if existing else "") + "set -gx NEW_SETTING kept\n"
-                self.assertEqual(rc.read_text(), expected)
-                if existing:
-                    self.assertTrue(rc.is_symlink())
-                    self.assertEqual(target.stat().st_mode & 0o777, 0o600)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_incomplete_legacy_markers_are_not_silently_removed(self):
+        with self.assertRaises(RuntimeError):
+            replace_block("# >>> model-guard-codex >>>\n", "")
