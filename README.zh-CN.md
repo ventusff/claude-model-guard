@@ -134,7 +134,7 @@ model-guard-codex remove
 
 在被监测终端以外运行 `check` 时，用 `--session 目录` 明确指定；程序不会猜测其他终端的会话。`probe` 可用 `-m 模型 -r 强度` 仅调整该请求，不能替已有会话证明路由。两者退出码均为：`0` 有效模型披露一致，`2` 不一致，`3` 未验证，`4` 监测不可用或探针失败。独立的 JSON 字段 `reasoning.alert` 为 `none`、`watch` 或 `suspect`；路由披露一致时仍可能有推理告警。其 JSON 不含账号和对话文本；`status --json` 则包含横幅显示的账号。
 
-移除时删除受管理的 shell PATH 区块和启动器，保留配置、备份和分版本的 Python 环境，让已有会话正常结束。支持 bash 和 zsh 启动文件。`codex exec` 等非交互命令、管道输入、`resume`/`fork`、显式 `--remote`、`--profile` 以及 `--oss`/`--local-provider` 启动均转交官方 Codex；**resume/fork/profile/remote/本地模型启动没有路由横幅**，会打印提示。远端连接会改变恢复/派生会话的目录选择行为，且目前无法把 profile-v2 的服务商配置层安全地传给独立 app-server。Windows 可在 WSL 中运行。已经打开的终端和会话不会被强行改造。
+移除时删除受管理的 shell PATH 区块和启动器，保留配置、备份和分版本的 Python 环境，让已有会话正常结束。支持 bash、zsh 和 Fish 启动文件。Fish 使用 `config.fish` 中的受管理区块（遵循 `XDG_CONFIG_HOME`），不修改持久化的 universal 变量。`codex exec` 等非交互命令、管道输入、`resume`/`fork`、显式 `--remote`、`--profile` 以及 `--oss`/`--local-provider` 启动均转交官方 Codex；**resume/fork/profile/remote/本地模型启动没有路由横幅**，会打印提示。远端连接会改变恢复/派生会话的目录选择行为，且目前无法把 profile-v2 的服务商配置层安全地传给独立 app-server。Windows 可在 WSL 中运行。已经打开的终端和会话不会被强行改造。
 
 在 Codex 插件目录中验证：
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.1 — 2026-09-09
+
+- **Enable the Codex launcher in Fish.** Add a reversible PATH block to the
+  existing Fish configuration (or create it when Fish is the login shell),
+  respecting `XDG_CONFIG_HOME`. New terminals resolve Model Guard before stock
+  Codex, including when its directory was already later in PATH. No persistent
+  Fish universal variables, model defaults or running sessions are changed.
+- Preserve custom shell content and dotfile symlinks on install/removal.
+  Regression checks execute real Fish startup with quoted paths and verify
+  that removal restores the official command.
+
 ## 1.5.0 — 2026-09-09
 
 - **Passive Codex reasoning diagnostics.** Show the last response's reasoning

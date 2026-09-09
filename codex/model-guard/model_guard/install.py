@@ -32,8 +32,12 @@ def replace_block(text, block):
     return text + ("\n" if text and not text.endswith("\n") else "") + block
 
 
-def shell_block(root):
+def shell_block(root, *, fish=False):
     directory = str(root / "bin")
+    if fish:
+        quoted = "'" + directory.replace("\\", "\\\\").replace("'", "\\'") + "'"
+        # --path changes only this shell's PATH, never persistent fish_user_paths.
+        return START + "\nfish_add_path --path --move -- " + quoted + "\n" + END + "\n"
     return (
         START + "\n"
         + "case \":${PATH}:\" in\n"
@@ -85,10 +89,16 @@ def install(source, language=None, modify_shell=True):
         zsh = Path.home() / ".zshrc"
         if zsh.exists() or Path(os.environ.get("SHELL", "")).name == "zsh":
             rc_paths.append(zsh)
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+        if not config_home.is_absolute():
+            config_home = Path.home() / ".config"
+        fish = config_home / "fish/config.fish"
+        if fish.exists() or Path(os.environ.get("SHELL", "")).name == "fish":
+            rc_paths.append(fish)
     changes = []
     for path in rc_paths:
         before = path.read_text() if path.exists() else ""
-        after = replace_block(before, shell_block(root))
+        after = replace_block(before, shell_block(root, fish=path.suffix == ".fish"))
         changes.append((path, before, after))
     # Every upgrade gets its own venv. Activation is one symlink replacement;
     # a failed install cannot break a working version or its running sessions.
@@ -124,7 +134,8 @@ def install(source, language=None, modify_shell=True):
         # Catch another session's intervening dotfile write instead of overwriting it.
         current = path.read_text() if path.exists() else ""
         if current != before:
-            after = replace_block(current, shell_block(root))
+            after = replace_block(current, shell_block(root, fish=path.suffix == ".fish"))
+        path.parent.mkdir(parents=True, exist_ok=True)
         atomic_text(path, after)
     state_path = root / "install.json"
     previous = json.loads(state_path.read_text()) if state_path.exists() else {}
@@ -140,9 +151,9 @@ def remove():
     if not state_path.exists():
         raise RuntimeError("No managed Model Guard installation record was found")
     state = json.loads(state_path.read_text())
-    expected = shell_block(root)
     for name in state.get("shell_files", []):
         path = Path(name)
+        expected = shell_block(root, fish=path.suffix == ".fish")
         if path.exists():
             content = path.read_text()
             match = BLOCK.search(content)
