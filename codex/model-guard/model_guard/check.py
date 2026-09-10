@@ -11,36 +11,50 @@ from websockets.exceptions import ConnectionClosed
 
 from . import __version__
 from .relay import MAX_MESSAGE, Relay, object_from_json
-from .state import State, model_id
+from .state import DISCLOSURE_SOURCES, State, model_id
 from .reasoning import Reasoning, alert_text, token_count, usage_text
 
 
-EXIT_CODES = {"reported_match": 0, "reported_mismatch": 2, "unverified": 3, "unavailable": 4}
+EXIT_CODES = {"reported_match": 0, "reported_mismatch": 2, "unverified": 3, "unavailable": 4, "label_mismatch": 5}
 
 
 def verdict(snapshot, scope="current_session"):
-    """Produce a shareable result without account identifiers or conversation data."""
+    """Produce a shareable result without account identifiers or conversation data.
+
+    The status follows the effective-model disclosure. A response body label
+    is weaker evidence: it only decides between `unverified` and
+    `label_mismatch` when no effective model was disclosed.
+    """
     thread = snapshot.get("thread") or {}
     mismatch = model_id(thread.get("mismatch"))
     requested = model_id(thread.get("mismatch_requested")) if mismatch else model_id(thread.get("requested"))
     observed = mismatch or model_id(thread.get("observed"))
     source = thread.get("mismatch_source") if thread.get("mismatch") else thread.get("source")
     observed_at = thread.get("mismatch_at") if thread.get("mismatch") else thread.get("observed_at")
+    label_differs = model_id(thread.get("label_mismatch"))
+    body_label = label_differs or model_id(thread.get("body_label"))
     health = snapshot.get("health")
     if health != "connected":
         status, reason = "unavailable", "observer_not_connected"
-    elif not requested or not observed or source not in ("server-model-log", "model/rerouted", "model/routing/updated"):
-        status, reason = "unverified", "effective_model_not_disclosed"
+    elif not requested or not observed or source not in DISCLOSURE_SOURCES:
+        if label_differs:
+            status, reason = "label_mismatch", "response_body_label_differs"
+        else:
+            status, reason = "unverified", "effective_model_not_disclosed"
     elif mismatch or requested.casefold() != observed.casefold():
         status, reason = "reported_mismatch", "server_reported_different_model"
     else:
         status, reason = "reported_match", "server_reported_matching_model"
+    if status == "label_mismatch":
+        requested = model_id(thread.get("label_mismatch_requested")) or requested
     return {
         "status": status, "exit_code": EXIT_CODES[status], "reason": reason,
         "scope": scope, "requested": requested, "server_reported": observed,
         "current_requested": model_id(thread.get("requested")),
         "source": source if observed else None,
         "observed_at": observed_at if observed else None,
+        "body_label": body_label,
+        "body_label_consistent": None if body_label is None else label_differs is None,
         "turn_running": thread.get("running") is True,
         "weights_verified": False,
         "reasoning": export_reasoning(thread.get("reasoning")),
@@ -110,7 +124,7 @@ async def probe(official, model=None, effort=None, timeout=120, cwd=None, option
     This is a separate request. It never certifies another session or changes its
     settings. Raw RPC traffic and stderr stay in memory and are not exported.
     """
-    state = State(show_account=False)
+    state = State()
     started = time.monotonic()
     result = None
     with tempfile.TemporaryDirectory(prefix="mg-probe-") as temp:
@@ -165,11 +179,16 @@ def format_result(result):
     warning = alert_text(signal)
     if warning:
         auxiliary += " | " + warning + " (heuristic)"
+    if result["body_label"] is None:
+        body = "none"
+    else:
+        body = result["body_label"] + (" (consistent with the request)" if result["body_label_consistent"] else " (differs from the request)")
     return (
         f"Routing: {result['status']}\n"
         f"Requested: {result['requested'] or 'unknown'}\n"
         f"Server reported: {model}\n"
         f"Evidence: {result['source'] or 'none'}\n"
+        f"Body label: {body}\n"
         f"Scope: {result['scope']}\n"
         f"Reason: {result['reason']}\n"
         f"Reasoning: {auxiliary}\n"

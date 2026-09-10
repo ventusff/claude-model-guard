@@ -1,6 +1,6 @@
 # Codex routing: research and evidence
 
-Verified on Linux (`nomad-u`), 2026-09-09, using official Codex **0.153.4** and the matching source commit **3d2ee51ca2d5db578f328aa75e20aa22c0197c9a**.
+Verified on Linux (`nomad-u`), 2026-09-09 and 2026-09-10, using official Codex **0.153.4** and the matching source commit **3d2ee51ca2d5db578f328aa75e20aa22c0197c9a**.
 
 [中文调研结论](ROUTING.zh-CN.md)
 
@@ -12,7 +12,7 @@ An original community report reproduced `gpt-5.3-codex` requests returning a `gp
 
 A newer reporter observed missing server-model information while requesting `gpt-5.6-sol`. This is a useful example of the observability gap, not independent proof of a route change. [Report #34988](https://github.com/openai/codex/issues/34988).
 
-**Version 1.5 adopts exact-516 reasoning telemetry as a practical warning signal.** Statistical fingerprinting is a viable complementary audit method. Neither mechanism currently establishes an undisclosed GPT-4o identity for every individual request; this narrower limitation does not make anomaly detection useless.
+**Version 1.5 adopts exact-516 reasoning telemetry as a practical warning signal, and 1.7 adds the response body's model label as a second-tier disclosed signal.** Statistical fingerprinting is a viable complementary audit method. Neither mechanism currently establishes an undisclosed GPT-4o identity for every individual request; this narrower limitation does not make anomaly detection useless.
 
 ## Passive 516 detection
 
@@ -59,6 +59,24 @@ python3 research/reasoning_counts.py /explicit/path/to/session/date/directory
 These natural workloads contain different tasks and tool rounds, without correctness annotations or independent backend ground truth. The percentages measure exact-516 incidence, **not substitution rates**. They establish that the signal exists under current requested labels and is worth exposing; they do not validate a GPT-5.5-specific causal explanation for GPT-6.
 
 A subsequent separate live probe through the unchanged official login, model `gpt-6-astra`, effort `max`, reported 29 reasoning tokens and one counted response. Effective model disclosure remained absent. The integration tests also drive the real official binary through SSE and WebSocket fixtures with `[516, 0, 516, 2000, 516]`, verifying three hits, five observations and an independent routing verdict. Fixture data demonstrates the detector's plumbing, while the session aggregate demonstrates the real phenomenon.
+
+## The response body's model label
+
+Every Responses stream states a `model` inside `response.created` and `response.completed`. It is written by the server, so it is disclosed metadata, but it is not the effective-model header: official [PR #12061](https://github.com/openai/codex/pull/12061) (2026-02-18) removed the client's comparison against it "so that we are less likely to have false positive" and to report the "correct slug name", without publishing the offending cases. The plausible reading is that the body label can carry a dated or suffixed variant of the requested slug.
+
+On a ChatGPT login the effective-model header is usually absent (see the live checks below), which left the guard unable to say anything about the everyday route. Version 1.7 therefore carries the label on `model/routing/updated` as `responseLabel` and compares it with a rule built for exactly the false-positive class the official client avoided:
+
+| Requested | Body label | Result |
+|---|---|---|
+| `gpt-6-astra` | `gpt-6-astra`, `GPT-6-Astra` | consistent |
+| `gpt-6-astra` | `gpt-6-astra-2026-09-01`, `gpt-6-astra-codex` | consistent: the label extends the request at a separator |
+| `gpt-6-astra` | `gpt-6` | consistent: the label is the bare family |
+| `gpt-6-astra` | `gpt-6-astra-mini`, `-nano`, `-lite`, `-small`, `-fast`, `-flash`, `-turbo` | differs: a size tier names another model |
+| `gpt-6-astra` | `gpt-4o`, `gpt-5.6-sol`, `gpt-6-astrax` | differs |
+
+The rule is implemented twice, in the native TUI and in the Python probe, with the same test table. A differing label draws an orange line under the footer (`Response labeled gpt-4o · requested gpt-6-astra (body label, not a header)`), ranked below the red effective-model difference, which always wins when present. `/status` shows the label whether or not it differs. The probe exports `body_label` and `body_label_consistent`, and exits `5` when the label differs and nothing was disclosed; a disclosed header keeps deciding the strict status in either direction.
+
+What the label proves is bounded in the same way as the header: it is what the server chose to write. A provider can label a response with the requested slug regardless of the weights behind it, so a consistent label is not verification, and the export keeps `weights_verified: false`. A label from another family is nevertheless the strongest everyday evidence available on this backend, because it is the server's own statement about the response, not an inference from its behaviour.
 
 ## Statistical fingerprints with practical potential
 
@@ -139,12 +157,12 @@ The separate research paper [One Token Is Enough](https://arxiv.org/abs/2607.102
 | [sh-ai-x/codex-statusline](https://github.com/sh-ai-x/codex-statusline) | Configure stock model/context/usage footer items | A configured model is not backend evidence; no arbitrary command renderer |
 | [mullller/codex-hud](https://github.com/mullller/codex-hud) | Use tmux to keep a HUD visible around stock Codex | Latest-session-file selection is insufficient for strict per-terminal routing attribution |
 | [brandonwie/codex-hud](https://github.com/brandonwie/codex-hud) | Optional patched native footer and version checks | Maintaining a patched binary ties upgrades to custom runtime builds |
-| [Every Code](https://github.com/just-every/code) | Community Codex fork; its author linked automatic route detection in #11189 | A full independent fork is broader than the small pinned native extension used here |
+| [Every Code](https://github.com/just-every/code) | Community Codex fork; its author linked automatic route detection in #11189 | A full independent fork is broader than the small pinned native extension used here; 1.7 adopts its idea of reading the body label, with a stricter comparison and a lower rank than the header |
 | Capture full SSE/WS TRACE and inspect model fields | Useful for reproducing old reports | Can persist prompts and tool outputs; `response.model` is not the current client's effective-model authority |
 
-Version 1.6 adopts a pinned native Codex source extension. The earlier tmux design was rejected after it altered mouse-wheel behavior and bypassed resume/fork. Native rendering removes both failure mechanisms. The maintenance cost is explicit: source pins, reviewable patches, matching helper binaries and release checksums. No source code was copied from these community projects.
+Model Guard uses a pinned native Codex source extension. A tmux layer was rejected after it altered mouse-wheel behavior and bypassed resume/fork; native rendering removes both failure mechanisms. The maintenance cost is explicit: source pins, reviewable patches, matching helper binaries and release checksums. No source code was copied from these community projects.
 
-Every Code was additionally inspected at `07533447f713d39763047543cc19e1015a3a6a1e`: its [stream parser](https://github.com/just-every/code/blob/07533447f713d39763047543cc19e1015a3a6a1e/code-rs/core/src/client.rs) reads `response.created.response.model`, and its [comparison](https://github.com/just-every/code/blob/07533447f713d39763047543cc19e1015a3a6a1e/code-rs/core/src/codex/streaming.rs) accepts any nonempty hyphen suffix of the requested model. This can conceal a meaningfully different suffixed identifier. We did not adopt that equality rule.
+Every Code was additionally inspected at `07533447f713d39763047543cc19e1015a3a6a1e`: its [stream parser](https://github.com/just-every/code/blob/07533447f713d39763047543cc19e1015a3a6a1e/code-rs/core/src/client.rs) reads `response.created.response.model`, and its [comparison](https://github.com/just-every/code/blob/07533447f713d39763047543cc19e1015a3a6a1e/code-rs/core/src/codex/streaming.rs) accepts any nonempty hyphen suffix of the requested model. This can conceal a meaningfully different suffixed identifier, so 1.7 treats a size-tier suffix as a different model and shows every label in `/status`; the label never outranks the header.
 
 ## What official Codex 0.153.4 exposes
 
@@ -162,7 +180,7 @@ The choice of effective headers is deliberate: official [PR #12061](https://gith
 
 These findings are specific to the inspected release. Later versions may change log targets or protocol details. Unknown/missing fields must remain absent in diagnostics; they must not be filled from the selected model or an older turn, or turned into a permanent warning banner.
 
-## Runtime design (1.6)
+## Runtime design (1.7)
 
 ```text
 your terminal
@@ -172,11 +190,11 @@ your terminal
        └─ original provider, TLS, authentication and request path
 ```
 
-The native source extension emits `model/routing/updated` with thread, turn and sampling-request IDs, the actual requested model/provider/effort/tier, and an optional effective server model. It consumes the transport's existing `ServerModel` events; it never elevates body `response.model` to identity evidence. Missing disclosure remains missing. New sampling requests clear a positive disclosure; a mismatch is latched through the turn. Completed-turn warnings say `last turn`.
+The native source extension emits `model/routing/updated` with thread, turn and sampling-request IDs, the actual requested model/provider/effort/tier, an optional effective server model and an optional response body label. It consumes the transport's existing `ServerModel` events; the body label is carried as its own field and never becomes the server model. Missing disclosure remains missing. New sampling requests clear a positive disclosure; a mismatch is latched through the turn. Completed-turn warnings say `last turn`.
 
 Each widget consumes only its own visible thread. Hidden `threadSource=system` title generation and child threads cannot replace the model. Replay is excluded from live observations. Reasoning usage comes from `rawResponse/completed`, deduplicated by response ID, and is scoped to model/provider/effort/tier/account. Account identity uses Codex's native state. There is no extra account polling, live protocol adapter, state-file scraping, provider proxy or transport logging.
 
-Normal display reuses the existing footer without adding a row. A disclosed different model adds a red warning; at high or greater effort, at least three of five recent measured responses with exactly 516 reasoning tokens add an amber heuristic warning. A single hit does not change the default interface. `/status` provides full-sentence counts and evidence boundaries. The heuristic threshold is a product policy, not a calibrated probability of routing or truncation.
+Normal display reuses the existing footer without adding a row. A disclosed different model adds a red warning; a body label of another family or size tier adds an orange one; at high or greater effort, at least three of five recent measured responses with exactly 516 reasoning tokens add an amber heuristic warning. A single hit does not change the default interface. `/status` provides full-sentence counts and evidence boundaries. The heuristic threshold is a product policy, not a calibrated probability of routing or truncation.
 
 `resume`, `fork`, profiles, local providers and native remote connections follow Codex's original CLI, loader and directory semantics. An explicit remote server needs the metadata extension to disclose the complete request observations. Native terminal event handling is unchanged. Installation atomically switches the existing executable symlink; it does not insert shell PATH blocks. Source, schema and build details are in [native/README.md](native/README.md).
 
@@ -186,17 +204,19 @@ Normal display reuses the existing footer without adding a row. A disclosed diff
 
 `model-guard-codex probe --json` makes one separate ephemeral read-only request using the official app-server's own authentication and current workspace configuration. It consumes provider quota and cannot certify an existing session. Optional `-m MODEL -r EFFORT` applies only to the probe. Its private stdio/Unix-WebSocket adapter is used solely for this explicit diagnostic, never around the interactive TUI.
 
-The probe returns `0` for matching effective-model disclosure, `2` for a disclosed difference, `3` for missing disclosure, and `4` for an unavailable/failed probe. JSON omits account identifiers and conversation text. `weights_verified` is always false: matching provider metadata is not independent verification of weights.
+The probe returns `0` for matching effective-model disclosure, `2` for a disclosed difference, `3` for missing disclosure, `4` for an unavailable/failed probe, and `5` for a body label that differs while nothing was disclosed. JSON omits account identifiers and conversation text. `weights_verified` is always false: matching provider metadata is not independent verification of weights.
 
 ## Validation
 
-Regression tests use isolated Codex homes and local Responses fixtures without a login. They cover headers and WebSocket metadata, metadata-free replies whose body deliberately claims GPT-4o, visible-thread attribution, account/settings boundaries, duplicate response IDs, native layout snapshots and real PTY startup/resume/fork/paste/resize. Source build checks and limitations are recorded in the native build documentation.
+Regression tests use isolated Codex homes and local Responses fixtures without a login. They cover headers and WebSocket metadata, metadata-free replies whose body deliberately claims GPT-4o (a label mismatch, never a verified route), visible-thread attribution, account/settings boundaries, duplicate response IDs, native layout snapshots and real PTY startup/resume/fork/paste/resize. Source build checks and limitations are recorded in the native build documentation.
 
 GPT-4o replies in these tests are **synthetic fixtures**. The tests validate detection of disclosed differences; they do not establish that OpenAI routed this machine's traffic to GPT-4o.
 
 ## Live check on the development machine
 
 A minimal real-account request on nomad-u selected `gpt-6-astra`. The adapter received account identity and quota data but no effective server-model report, so the route remained unverified. No downgrade was established. Account identifiers and tokens are deliberately omitted from this public record.
+
+A 1.7 probe on 2026-09-10 through the installed native build, model `gpt-6-astra` at `max`, again received no effective-model header; the response body was labeled `gpt-6-astra`, consistent with the request, and the probe reported `unverified` with `body_label_consistent: true`. That is the everyday shape of this backend: the label is present on every response, the header is not.
 
 An additional default WebSocket probe confirmed that neither handshake model metadata nor a core effective-model event was present. A separate diagnostic using the official app-server with an invocation-only OpenAI provider alias and WebSockets disabled returned SSE `response.model=gpt-6-astra`, with no effective model report. The diagnostic did not change the user's provider/model configuration files. Raw transport data was parsed in memory; only allowlisted results were retained. The native runtime continues to use the original provider and transport.
 

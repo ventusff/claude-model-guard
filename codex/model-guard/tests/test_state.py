@@ -1,7 +1,7 @@
 import unittest
 
-from model_guard.state import State
 from model_guard.check import verdict
+from model_guard.state import State, label_consistent
 
 
 class StateTests(unittest.TestCase):
@@ -16,6 +16,10 @@ class StateTests(unittest.TestCase):
 
     def log(self, actual="gpt-6-astra", tid="t1", turn="turn1"):
         self.s.log({"target": "codex_core::session", "fields": {"message": f"server reported model {actual} (matches requested model)"}, "spans": [{"thread_id": tid}, {"turn_id": turn, "model": "gpt-6-astra"}]})
+
+    def routing(self, server=None, label=None, turn="turn1", requested="gpt-6-astra"):
+        self.event("model/routing/updated", turnId=turn, requestedModel=requested, serverModel=server,
+                   responseLabel=label, modelProvider="openai", reasoningEffort="max")
 
     def test_selected_model_is_not_evidence(self):
         self.assertIsNone(self.s.snapshot()["thread"]["observed"])
@@ -42,16 +46,58 @@ class StateTests(unittest.TestCase):
         self.assertEqual(verdict(self.s.snapshot())["status"], "reported_mismatch")
 
     def test_native_routing_is_authoritative_over_delayed_legacy_logs(self):
-        self.event("model/routing/updated", turnId="turn1", requestedModel="gpt-6-astra", serverModel="gpt-6-astra", modelProvider="openai", reasoningEffort="max")
+        self.routing(server="gpt-6-astra")
         self.log("gpt-4o")
         result = verdict(self.s.snapshot())
         self.assertEqual((result["status"], result["source"]), ("reported_match", "model/routing/updated"))
+
+    def test_body_label_is_a_second_tier_signal(self):
+        self.routing(label="gpt-6-astra-2026-09-01")
+        result = verdict(self.s.snapshot())
+        self.assertEqual((result["status"], result["body_label"], result["body_label_consistent"]),
+                         ("unverified", "gpt-6-astra-2026-09-01", True))
+        self.routing(label="gpt-4o")
+        result = verdict(self.s.snapshot())
+        self.assertEqual((result["status"], result["exit_code"], result["body_label_consistent"]), ("label_mismatch", 5, False))
+        self.assertIsNone(result["server_reported"])
+        # A later request without a label keeps the latched difference through the turn,
+        # and the export names the request the label differed from.
+        self.routing(requested="gpt-4o")
+        result = verdict(self.s.snapshot())
+        self.assertEqual((result["status"], result["requested"], result["current_requested"]),
+                         ("label_mismatch", "gpt-6-astra", "gpt-4o"))
+        # A disclosed effective model decides the strict status, in either direction.
+        self.routing(server="gpt-6-astra", label="gpt-4o")
+        result = verdict(self.s.snapshot())
+        self.assertEqual((result["status"], result["body_label_consistent"]), ("reported_match", False))
+        self.routing(server="gpt-4o", label="gpt-4o")
+        self.assertEqual(verdict(self.s.snapshot())["exit_code"], 2)
+        self.event("turn/completed", turn={"id": "turn1"})
+        self.event("turn/started", turn={"id": "turn2"})
+        self.assertEqual(verdict(self.s.snapshot())["body_label"], None)
+
+    def test_label_consistency_rule_matches_the_native_build(self):
+        for requested, label, expected in [
+            ("gpt-6-astra", "gpt-6-astra", True),
+            ("GPT-6-Astra", "gpt-6-astra", True),
+            ("gpt-6-astra", "gpt-6-astra-2026-09-01", True),
+            ("gpt-6-astra", "gpt-6", True),
+            ("gpt-5.6-sol", "gpt-5.6-sol-codex", True),
+            ("gpt-6-astra", "gpt-4o", False),
+            ("gpt-6-astra", "gpt-6-astra-mini", False),
+            ("gpt-6-astra", "gpt-6-astrax", False),
+            ("gpt-6-astra", "gpt-5.6-sol", False),
+        ]:
+            with self.subTest(requested=requested, label=label):
+                self.assertEqual(label_consistent(requested, label), expected)
 
     def test_child_and_delayed_events_do_not_change_parent(self):
         self.log("gpt-4o", tid="agent")
         self.log("gpt-4o", turn="old")
         self.event("model/rerouted", turnId="old", toModel="gpt-4o")
+        self.routing(label="gpt-4o", turn="old")
         self.assertIsNone(self.s.snapshot()["thread"]["observed"])
+        self.assertIsNone(self.s.snapshot()["thread"]["body_label"])
 
     def test_hidden_title_request_cannot_replace_visible_model_or_usage(self):
         original = self.s.snapshot()["thread"]
@@ -108,26 +154,6 @@ class StateTests(unittest.TestCase):
         self.event("turn/started", turn={"id": "turn2"})
         self.assertEqual(self.s.snapshot()["thread"]["observed"], "gpt-6-astra")
 
-    def test_streaming_limits_cannot_reintroduce_previous_account_usage(self):
-        self.s.set_account({"type": "chatgpt", "email": "new@example.com", "planType": "pro"})
-        self.event("account/rateLimits/updated", rateLimits={"primary": {"usedPercent": 99, "windowDurationMins": 300}})
-        self.assertEqual(self.s.snapshot()["limits"], {})
-
-    def test_fresh_quota_snapshot_replaces_missing_windows(self):
-        self.s.set_account({"type": "chatgpt", "email": "a@example.com", "planType": "pro"})
-        self.s.set_limits({"primary": {"usedPercent": 92, "windowDurationMins": 300}})
-        self.s.set_limits({"primary": None, "secondary": {"usedPercent": 10, "windowDurationMins": 10080}})
-        self.assertEqual(set(self.s.snapshot()["limits"]), {"secondary"})
-
-    def test_account_identity_change_invalidates_pending_reads_without_notification(self):
-        self.s.set_account({"type": "chatgpt", "email": "a@example.com", "planType": "pro"})
-        epoch = self.s.auth_epoch
-        self.s.client({"id": 17, "method": "account/read"})
-        self.s.set_account({"type": "chatgpt", "email": "b@example.com", "planType": "pro"})
-        self.s.server({"id": 17, "result": {"account": {"type": "chatgpt", "email": "a@example.com", "planType": "pro"}}})
-        self.assertGreater(self.s.auth_epoch, epoch)
-        self.assertEqual(self.s.snapshot()["account"]["email"], "b@example.com")
-
     def test_nullable_reasoning_setting_does_not_keep_old_effort(self):
         self.event("turn/completed", turn={"id": "turn1"})
         self.event("thread/settings/updated", threadSettings={"effort": None})
@@ -138,21 +164,11 @@ class StateTests(unittest.TestCase):
         self.s.log({"target": "codex_api::sse", "fields": {"message": "server reported model gpt-4o (matches requested model)"}})
         self.assertIsNone(self.s.snapshot()["thread"]["observed"])
 
-    def test_account_switch_clears_usage(self):
-        self.s.set_account({"type": "chatgpt", "email": "a@example.com", "planType": "pro", "access_token": "secret"})
-        self.s.set_limits({"primary": {"usedPercent": 92, "windowDurationMins": 300}})
-        self.assertNotIn("secret", str(self.s.snapshot()))
-        self.s.set_account({"type": "chatgpt", "email": "b@example.com", "planType": "pro"})
-        self.assertEqual(self.s.snapshot()["limits"], {})
+    def test_snapshot_carries_no_account_or_credential_fields(self):
         self.event("account/updated", authMode="chatgpt")
-        self.assertIsNone(self.s.snapshot()["account"])
-
-    def test_custom_provider_cannot_claim_openai_account(self):
-        self.s.set_account({"type": "chatgpt", "email": "a@example.com", "planType": "pro"})
-        self.event("thread/settings/updated", threadSettings={"modelProvider": "custom"})
-        self.event("turn/started", turn={"id": "turn2"})
-        self.assertIsNone(self.s.snapshot()["account"])
-
+        self.event("account/rateLimits/updated", rateLimits={"primary": {"usedPercent": 99}})
+        snapshot = self.s.snapshot()
+        self.assertEqual(set(snapshot), {"schema", "health", "updated_at", "thread"})
 
 
 if __name__ == "__main__":

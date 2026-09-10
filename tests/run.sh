@@ -6,7 +6,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 export MODEL_GUARD_STATE_DIR="$tmp/state" MODEL_GUARD_CONF="$tmp/model-guard.conf" \
        MODEL_GUARD_SETTINGS="$tmp/settings.json" MODEL_GUARD_SESSIONS_DIR="$tmp/sessions" \
-       MODEL_GUARD_CREDENTIALS="$tmp/credentials.json"
+       MODEL_GUARD_CREDENTIALS="$tmp/credentials.json" MODEL_GUARD_INSTALL_DIR="$tmp/.claude/model-guard"
 unset KITTY_LISTEN_ON KITTY_WINDOW_ID TMUX TMUX_PANE ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID \
       CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR
 mkdir -p "$tmp/sessions"
@@ -312,6 +312,35 @@ check "SHOW_LIMIT=false hides the plain reading" '! grep -q "⏳" <<<"$out"'
 rm -f "$MODEL_GUARD_CREDENTIALS"; n=$(calls)
 out=$(band)
 check "no login token: the payload's own reading, nothing asked" '[ "$(calls)" = "$n" ] && grep -q "5h limit 99%!" <<<"$out"'
+
+echo "== session-start install check"
+ci="$root/scripts/check-install.sh"
+inst="$MODEL_GUARD_INSTALL_DIR"
+start(){ jq -nc '{hook_event_name:"SessionStart",session_id:"ci",source:"startup"}' | HOME="$tmp" "$ci"; }
+printf 'LANGUAGE=en\n' > "$MODEL_GUARD_CONF"
+printf '{"model":"claude-fable-5-1[1m]"}\n' > "$MODEL_GUARD_SETTINGS"
+out=$(start)
+check "unregistered statusline: setup hint" 'grep -q "run /model-guard:setup" <<<"$out"'
+printf 'LANGUAGE=en\nSETUP_HINT=off\n' > "$MODEL_GUARD_CONF"
+check "SETUP_HINT=off silences the hint" '[ -z "$(start)" ]'
+printf 'LANGUAGE=en\n' > "$MODEL_GUARD_CONF"
+jq --arg c "$inst/statusline.sh" '.statusLine={type:"command",command:$c}' "$MODEL_GUARD_SETTINGS" > "$tmp/x" && mv "$tmp/x" "$MODEL_GUARD_SETTINGS"
+out=$(start)
+check "registered but not installed: scripts installed and announced" 'grep -q "refreshed to $MG_VERSION" <<<"$out" && [ -x "$inst/statusline.sh" ] && [ -f "$inst/lib.sh" ] && [ -f "$inst/text.sh" ]'
+check "installed copy renders a band on its own" 'printf "{\"model\":{\"id\":\"claude-fable-5-1[1m]\",\"display_name\":\"Fable 5.1\"}}" | HOME="$tmp" "$inst/statusline.sh" | grep -q "✔"'
+check "a current install is left alone, silently" '[ -z "$(start)" ]'
+sed -i "s/^MG_VERSION=.*/MG_VERSION=\"0.0.1\"/" "$inst/lib.sh"
+out=$(start)
+check "an older installed copy is refreshed in place" 'grep -q "was 0.0.1" <<<"$out" && grep -q "MG_VERSION=\"$MG_VERSION\"" "$inst/lib.sh"'
+rm -f "$inst/text.sh"
+out=$(start)
+check "a missing file makes the set incomplete: refreshed again" 'grep -q "refreshed to $MG_VERSION" <<<"$out" && [ -f "$inst/text.sh" ] && [ -z "$(ls "$inst"/*.mg-new 2>/dev/null)" ]'
+legacy="$tmp/.claude/model-guard.sh"
+cp "$root/scripts/statusline.sh" "$legacy"; chmod +x "$legacy"
+jq --arg c "$legacy" '.statusLine.command=$c' "$MODEL_GUARD_SETTINGS" > "$tmp/x" && mv "$tmp/x" "$MODEL_GUARD_SETTINGS"
+start >/dev/null
+check "a registered flat path becomes a hand-off to the installed statusline" 'grep -qF "exec $inst/statusline.sh" "$legacy"'
+check "the hand-off renders the band" 'printf "{\"model\":{\"id\":\"claude-haiku-4-5\",\"display_name\":\"Haiku 4.5\"}}" | HOME="$tmp" "$legacy" | grep -q "DOWNGRADED"'
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

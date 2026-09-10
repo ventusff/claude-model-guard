@@ -47,7 +47,7 @@ class InstallTests(unittest.TestCase):
             legacy_codex.chmod(0o755)
             real_run = subprocess.run
             actual_check_output = subprocess.check_output
-            with patch.dict(os.environ, {"MODEL_GUARD_CODEX_HOME": str(root)}), patch("model_guard.install.venv.create"), patch("model_guard.install.subprocess.run", side_effect=lambda args, **kw: None if "pip" in args else real_run(args, **kw)):
+            with patch.dict(os.environ, {"MODEL_GUARD_CODEX_HOME": str(root)}), patch("model_guard.install.venv.create"), patch("model_guard.sessions.running", return_value=[]), patch("model_guard.sessions.executables", return_value=[]), patch("model_guard.install.subprocess.run", side_effect=lambda args, **kw: None if "pip" in args else real_run(args, **kw)):
                 for _ in range(2):
                     state_before = (root / "install.json").read_text()
                     entry_before = os.readlink(entry)

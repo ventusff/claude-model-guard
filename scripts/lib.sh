@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
-# model-guard shared helpers, sourced by guard-hook.sh and recover.sh.
-# Requires bash 4+ and jq. Everything is namespaced mg_*.
+# model-guard shared helpers, sourced by statusline.sh, guard-hook.sh and
+# recover.sh. Requires bash 4+ and jq. Everything is namespaced mg_*.
 #
-# Config: ~/.claude/model-guard.conf (KEY=VALUE per line). Recovery keys:
+# Config: ~/.claude/model-guard.conf (KEY=VALUE per line). Band keys:
+#   LANGUAGE=auto|en|zh|ja|ko|es|fr|de|pt   band and hook language; auto follows
+#                               the "language" key in settings.json, else English
+#   EXPECTED_MODEL=<pattern>    grep -Ei pattern the session model must match
+#                               (default: the "model" saved in settings.json)
+#   SHOW_ACCOUNT=true|false     logged-in account email on the band (default true)
+#   SHOW_CONTEXT=true|false     context-window usage (default true)
+#   SHOW_LIMIT=true|false       the account's 5-hour and 7-day usage (default true)
+#   LIMIT_WARN_AT=<0-100|off>   red patch when 5-hour usage reaches N (default 80)
+# Recovery keys:
 #   RECOVER=on|off              master switch for the hooks (default on)
 #   RECOVER_MODEL=<model id>    model to switch to after an automatic downgrade
 #                               (default claude-opus-5[1m])
 #   RECOVER_EFFORT=<level|off>  effort applied on the recovery model (default max)
 #   RECOVER_PROMPT=<text>       prompt sent to resume the interrupted task
-#                               (default: "继续" for zh, "Continue." otherwise)
+#                               (default: the band language's "Continue.")
 #   RECOVER_CHANNEL=auto|tmux|zellij|kitty|dryrun|none
 #                               how keystrokes reach the session (default auto:
 #                               tmux pane, then zellij pane, then kitty remote
@@ -25,13 +34,20 @@
 #              (turn_stopped) and the hooks stay out of the way afterwards;
 #              note says why (no_channel, target_flagged, too_many_recoveries,
 #              downgraded_again, target_not_stronger, switch_not_observed)
+#
+# The installed copy under ~/.claude/model-guard/ is what Claude Code runs for
+# the statusline; check-install.sh refreshes it when MG_VERSION moves.
 
-MG_VERSION="1.6.0"
+MG_VERSION="1.7.0"
 MG_CONF="${MODEL_GUARD_CONF:-$HOME/.claude/model-guard.conf}"
 MG_SETTINGS="${MODEL_GUARD_SETTINGS:-$HOME/.claude/settings.json}"
 MG_STATE_DIR="${MODEL_GUARD_STATE_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/model-guard}"
 MG_SESSIONS_DIR="${MODEL_GUARD_SESSIONS_DIR:-$HOME/.claude/sessions}"
 
+# shellcheck source=text.sh
+. "$(dirname "${BASH_SOURCE[0]}")/text.sh"
+
+# ---- config ----
 mg_conf_get() {
   [ -f "$MG_CONF" ] || return 0
   sed -n "s/^[[:space:]]*$1=//p" "$MG_CONF" | tail -n1 | tr -d '" '
@@ -43,14 +59,19 @@ mg_conf_or() {
   printf '%s' "${v:-$2}"
 }
 
+# mg_conf_on KEY: false only when the key is set to false.
+mg_conf_on() { [ "$(mg_conf_get "$1")" != false ]; }
+
 mg_debug() {
   [ "$(mg_conf_get DEBUG)" = true ] || return 0
   mkdir -p "$MG_STATE_DIR"
   printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >> "$MG_STATE_DIR/debug.log"
 }
 
-# ---- language (same resolution as the statusline) ----
+# ---- language: conf override > Claude Code "language" setting > English ----
+# Resolved once per process; every mg_text call reads the cached answer.
 mg_lang() {
+  if [ -n "${MG_LANG:-}" ]; then printf '%s' "$MG_LANG"; return; fi
   local lang settings_lang
   lang=$(mg_conf_get LANGUAGE)
   [ "${lang:-auto}" = auto ] && lang=""
@@ -67,6 +88,7 @@ mg_lang() {
       *)                               lang=en;;
     esac
   fi
+  MG_LANG=$lang
   printf '%s' "$lang"
 }
 
@@ -122,7 +144,28 @@ mg_display_name() {
   fi
 }
 
+# Effort strength: xhigh(4) > high(3) > medium(2) > low(1); anything else 0.
+mg_effort_rank() {
+  case "${1,,}" in
+    xhigh) echo 4;; high) echo 3;; medium) echo 2;; low) echo 1;; *) echo 0;;
+  esac
+}
+
 mg_settings_model() { jq -r '.model // empty' "$MG_SETTINGS" 2>/dev/null || true; }
+
+# The saved effort default for MODEL. /model and /effort save the current
+# model's default in modelSettings; the old global effortLevel can stay behind.
+# Context variants share the canonical key, so "[1m]" is stripped first.
+mg_settings_effort() {
+  jq -r --arg model "$1" '
+    def saved_effort: select(. == "low" or . == "medium" or . == "high" or . == "xhigh");
+    (.modelSettings | if type == "object" then . else {} end) as $models |
+    ($model | sub("\\[1[mM]\\]$"; "")) as $key |
+    ($models[$key].effortLevel? | saved_effort) //
+    ($models[$model].effortLevel? | saved_effort) //
+    (.effortLevel | saved_effort) // empty
+  ' "$MG_SETTINGS" 2>/dev/null || true
+}
 
 # ---- per-session state ----
 mg_state_file() { printf '%s/%s.json' "$MG_STATE_DIR" "$1"; }
@@ -212,138 +255,6 @@ mg_channel() {
     fi
   fi
   printf 'none'
-}
-
-# ---- user-facing text ----
-# mg_text KEY [printf args...]
-mg_text() {
-  local key="$1"; shift
-  local lang fmt
-  lang=$(mg_lang)
-  case "$lang:$key" in
-    zh:stop)        fmt="🚨 model-guard：%s 被 flag，会话被降到 %s，已停止。";;
-    zh:tail_switch) fmt="正在自动切到 %s…";;
-    zh:tail_manual) fmt="请 /model 切到 %s 后重发。";;
-    zh:tail_halted) fmt="%s 也会被 flag，不再自动切换，请 /model 自选。";;
-    zh:block_wait)  fmt="🚨 model-guard：正在从 %s 自动切到 %s，请稍等；若 30 秒内没切成功，/model 手动切。";;
-    zh:band_switch) fmt="🚨 被 flag：%s → %s · 自动切回 %s 中…";;
-    zh:band_manual) fmt="🚨 被 flag：%s → %s · 已停 · /model 切到 %s";;
-    zh:band_halted) fmt="🚨 被 flag 降到 %s · 已停 · /model 自选";;
-    zh:band_recov)  fmt="🔁 %s 被 flag → 已切到 %s";;
-    zh:notify_t)    fmt="model-guard：模型被 flag 降级";;
-    zh:notify_go)   fmt="%s → %s，已停止，正在切到 %s 并继续";;
-    zh:notify_done) fmt="已切到 %s，任务已继续";;
-    zh:notify_fail) fmt="切到 %s 没有成功（%s），会话保持停止";;
-    zh:notify_stop) fmt="%s → %s，已停止；%s";;
-    zh:prompt)      fmt="继续";;
-    ja:stop)        fmt="🚨 model-guard：%s がフラグされ、セッションは %s に格下げされました。停止しました。";;
-    ja:tail_switch) fmt="%s へ自動で切り替え中…";;
-    ja:tail_manual) fmt="/model で %s に切り替えてから再送してください。";;
-    ja:tail_halted) fmt="%s もフラグ対象のため自動切替しません。/model で選んでください。";;
-    ja:block_wait)  fmt="🚨 model-guard：%s から %s へ自動切替中です。30 秒で切り替わらなければ /model で手動切替。";;
-    ja:band_switch) fmt="🚨 フラグ：%s → %s · %s へ自動切替中…";;
-    ja:band_manual) fmt="🚨 フラグ：%s → %s · 停止 · /model で %s へ";;
-    ja:band_halted) fmt="🚨 フラグで %s に格下げ · 停止 · /model で選択";;
-    ja:band_recov)  fmt="🔁 %s がフラグ → %s に切替済み";;
-    ja:notify_t)    fmt="model-guard：モデルが格下げ";;
-    ja:notify_go)   fmt="%s → %s、停止。%s へ切替して続行します";;
-    ja:notify_done) fmt="%s に切替、タスク再開";;
-    ja:notify_fail) fmt="%s への切替失敗（%s）、停止のまま";;
-    ja:notify_stop) fmt="%s → %s、停止；%s";;
-    ja:prompt)      fmt="続けて";;
-    ko:stop)        fmt="🚨 model-guard: %s 이(가) 플래그되어 세션이 %s (으)로 강등되었습니다. 중지됨.";;
-    ko:tail_switch) fmt="%s (으)로 자동 전환 중…";;
-    ko:tail_manual) fmt="/model 로 %s (으)로 바꾼 뒤 다시 보내세요.";;
-    ko:tail_halted) fmt="%s 도 플래그 대상이라 자동 전환하지 않습니다. /model 로 고르세요.";;
-    ko:block_wait)  fmt="🚨 model-guard: %s → %s 자동 전환 중입니다. 30초 안에 안 되면 /model 로 수동 전환.";;
-    ko:band_switch) fmt="🚨 플래그: %s → %s · %s (으)로 자동 전환 중…";;
-    ko:band_manual) fmt="🚨 플래그: %s → %s · 중지 · /model 로 %s";;
-    ko:band_halted) fmt="🚨 플래그로 %s 강등 · 중지 · /model 로 선택";;
-    ko:band_recov)  fmt="🔁 %s 플래그 → %s 로 전환됨";;
-    ko:notify_t)    fmt="model-guard: 모델 강등";;
-    ko:notify_go)   fmt="%s → %s, 중지. %s 로 전환 후 계속";;
-    ko:notify_done) fmt="%s 로 전환, 작업 재개";;
-    ko:notify_fail) fmt="%s 전환 실패 (%s), 중지 유지";;
-    ko:notify_stop) fmt="%s → %s, 중지; %s";;
-    ko:prompt)      fmt="계속";;
-    es:stop)        fmt="🚨 model-guard: %s fue marcado y la sesión bajó a %s. Detenido.";;
-    es:tail_switch) fmt="Cambiando automáticamente a %s…";;
-    es:tail_manual) fmt="Cambia a %s con /model y reenvía.";;
-    es:tail_halted) fmt="%s también sería marcado; sin cambio automático: elige con /model.";;
-    es:block_wait)  fmt="🚨 model-guard: cambiando de %s a %s; espera. Si no cambia en 30 s, usa /model.";;
-    es:band_switch) fmt="🚨 marcado: %s → %s · cambiando a %s…";;
-    es:band_manual) fmt="🚨 marcado: %s → %s · detenido · /model a %s";;
-    es:band_halted) fmt="🚨 marcado, bajado a %s · detenido · elige con /model";;
-    es:band_recov)  fmt="🔁 %s marcado → ahora en %s";;
-    es:notify_t)    fmt="model-guard: modelo degradado";;
-    es:notify_go)   fmt="%s → %s, detenido. Cambiando a %s y continuando";;
-    es:notify_done) fmt="Cambiado a %s, tarea reanudada";;
-    es:notify_fail) fmt="No se pudo cambiar a %s (%s); sigue detenido";;
-    es:notify_stop) fmt="%s → %s, detenido; %s";;
-    es:prompt)      fmt="Continúa.";;
-    fr:stop)        fmt="🚨 model-guard : %s a été signalé, la session est passée à %s. Arrêt.";;
-    fr:tail_switch) fmt="Bascule automatique vers %s…";;
-    fr:tail_manual) fmt="Passe à %s avec /model puis renvoie.";;
-    fr:tail_halted) fmt="%s serait aussi signalé ; pas de bascule automatique : choisis avec /model.";;
-    fr:block_wait)  fmt="🚨 model-guard : bascule de %s vers %s en cours ; patiente. Sans succès en 30 s, utilise /model.";;
-    fr:band_switch) fmt="🚨 signalé : %s → %s · bascule vers %s…";;
-    fr:band_manual) fmt="🚨 signalé : %s → %s · arrêté · /model vers %s";;
-    fr:band_halted) fmt="🚨 signalé, rétrogradé à %s · arrêté · choisis avec /model";;
-    fr:band_recov)  fmt="🔁 %s signalé → passé à %s";;
-    fr:notify_t)    fmt="model-guard : modèle rétrogradé";;
-    fr:notify_go)   fmt="%s → %s, arrêté. Bascule vers %s puis reprise";;
-    fr:notify_done) fmt="Passé à %s, tâche reprise";;
-    fr:notify_fail) fmt="Bascule vers %s échouée (%s) ; toujours arrêté";;
-    fr:notify_stop) fmt="%s → %s, arrêté ; %s";;
-    fr:prompt)      fmt="Continue.";;
-    de:stop)        fmt="🚨 model-guard: %s wurde markiert, die Sitzung ist auf %s herabgestuft. Gestoppt.";;
-    de:tail_switch) fmt="Wechsle automatisch zu %s…";;
-    de:tail_manual) fmt="Mit /model zu %s wechseln und erneut senden.";;
-    de:tail_halted) fmt="%s würde ebenfalls markiert; kein automatischer Wechsel: mit /model wählen.";;
-    de:block_wait)  fmt="🚨 model-guard: Wechsel von %s zu %s läuft; bitte warten. Klappt es nicht in 30 s, /model verwenden.";;
-    de:band_switch) fmt="🚨 markiert: %s → %s · Wechsel zu %s…";;
-    de:band_manual) fmt="🚨 markiert: %s → %s · gestoppt · /model zu %s";;
-    de:band_halted) fmt="🚨 markiert, herabgestuft auf %s · gestoppt · mit /model wählen";;
-    de:band_recov)  fmt="🔁 %s markiert → gewechselt zu %s";;
-    de:notify_t)    fmt="model-guard: Modell herabgestuft";;
-    de:notify_go)   fmt="%s → %s, gestoppt. Wechsel zu %s, dann weiter";;
-    de:notify_done) fmt="Gewechselt zu %s, Aufgabe fortgesetzt";;
-    de:notify_fail) fmt="Wechsel zu %s fehlgeschlagen (%s); bleibt gestoppt";;
-    de:notify_stop) fmt="%s → %s, gestoppt; %s";;
-    de:prompt)      fmt="Weiter.";;
-    pt:stop)        fmt="🚨 model-guard: %s foi sinalizado e a sessão caiu para %s. Parado.";;
-    pt:tail_switch) fmt="Trocando automaticamente para %s…";;
-    pt:tail_manual) fmt="Troque para %s com /model e reenvie.";;
-    pt:tail_halted) fmt="%s também seria sinalizado; sem troca automática: escolha com /model.";;
-    pt:block_wait)  fmt="🚨 model-guard: trocando de %s para %s; aguarde. Se não trocar em 30 s, use /model.";;
-    pt:band_switch) fmt="🚨 sinalizado: %s → %s · trocando para %s…";;
-    pt:band_manual) fmt="🚨 sinalizado: %s → %s · parado · /model para %s";;
-    pt:band_halted) fmt="🚨 sinalizado, rebaixado para %s · parado · escolha com /model";;
-    pt:band_recov)  fmt="🔁 %s sinalizado → agora em %s";;
-    pt:notify_t)    fmt="model-guard: modelo rebaixado";;
-    pt:notify_go)   fmt="%s → %s, parado. Trocando para %s e continuando";;
-    pt:notify_done) fmt="Trocado para %s, tarefa retomada";;
-    pt:notify_fail) fmt="Troca para %s falhou (%s); segue parado";;
-    pt:notify_stop) fmt="%s → %s, parado; %s";;
-    pt:prompt)      fmt="Continue.";;
-    *:stop)         fmt="🚨 model-guard: %s was flagged and the session was downgraded to %s. Stopped.";;
-    *:tail_switch)  fmt="Switching to %s automatically…";;
-    *:tail_manual)  fmt="Switch to %s with /model and resend.";;
-    *:tail_halted)  fmt="%s would be flagged too, so no automatic switch: pick one with /model.";;
-    *:block_wait)   fmt="🚨 model-guard: switching from %s to %s, hold on. If it has not switched within 30 s, use /model.";;
-    *:band_switch)  fmt="🚨 FLAGGED: %s → %s · switching to %s…";;
-    *:band_manual)  fmt="🚨 FLAGGED: %s → %s · stopped · /model to %s";;
-    *:band_halted)  fmt="🚨 FLAGGED, downgraded to %s · stopped · pick one with /model";;
-    *:band_recov)   fmt="🔁 %s flagged → switched to %s";;
-    *:notify_t)     fmt="model-guard: model downgraded";;
-    *:notify_go)    fmt="%s → %s, stopped. Switching to %s and continuing";;
-    *:notify_done)  fmt="Switched to %s, task resumed";;
-    *:notify_fail)  fmt="Switch to %s failed (%s); still stopped";;
-    *:notify_stop)  fmt="%s → %s, stopped; %s";;
-    *:prompt)       fmt="Continue.";;
-  esac
-  # shellcheck disable=SC2059
-  printf "$fmt" "$@"
 }
 
 # mg_notify TITLE BODY [urgency]: desktop notice when notify-send exists.

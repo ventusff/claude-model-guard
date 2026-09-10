@@ -1,5 +1,5 @@
 {
-  "plugin_version": "1.6.0",
+  "plugin_version": "1.7.0",
   "codex_version": "0.153.4",
   "upstream_repository": "https://github.com/openai/codex.git",
   "upstream_ref": "rust-v0.153.4",
@@ -9,23 +9,23 @@
   "patches": [
     {
       "file": "0001-routing-metadata.patch",
-      "sha256": "d8ea732f3579493662e788777827414ee28bf668f04c8eb278b163c7504e92af"
+      "sha256": "2765e80b81e73384003687b02c08b9d458c0f21861d31362bc2c660b814aac70"
     },
     {
       "file": "0002-native-status-line.patch",
-      "sha256": "613b4a9fea80c812d5faff8b67ab93185eb99e7b14d6f85baf739e2977272251"
+      "sha256": "c046e7ac828c650e4404ccaa2abdbb27f2473e223b42d6a92a8567c765c6914e"
     },
     {
       "file": "0003-native-status-line-tests.patch",
-      "sha256": "158ec48ba30062a3c75a97e14331be79a02515cc8bddf85a770fd3d8f6b3a9f4"
+      "sha256": "eb85c59d829abdd356bd0ae2095702f86b0660ce5c5973177ab6f5d41eb55bda"
     },
     {
       "file": "0004-protocol-schemas.patch",
-      "sha256": "2edf2e0de0f569203f292e9b678c9e91b5f041feb3982b3f0d8a56fac4cef260"
+      "sha256": "597b76915a4dae179f75e62b170c7be2418a099d5b43765d3ea888dbf931371c"
     },
     {
       "file": "0005-release-packaging.patch",
-      "sha256": "502f9da68cc2342e4fe1617e6cc87d2290f409d8fa4cbe3c4e7746a6a2390ca5"
+      "sha256": "5de313d4b23362aed3ec6ab1bfc9227fb36f0adeab377ca78fa8ef1fb84b1c73"
     }
   ],
   "helper_sha256": {
@@ -34,7 +34,7 @@
     "codex-resources/zsh/bin/zsh": "67faaaa89242c4a332e16e508a1977cffc24bf7fca31d4411cdfd101f3831ef3",
     "codex-path/rg": "e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849"
   },
-  "sha256": "02e18164ae0ce5320c6d72bc9193dd5b4c74efb939f11723eda1b62349f4350a",
-  "url": "https://github.com/ventusff/claude-model-guard/releases/download/v1.6.0/model-guard-codex-linux-x86_64.tar.gz",
-  "binary_sha256": "0d742710922427f8bdd84bbecfa0cc57059e15a1f785e5ae0f74c9efe823eb56"
+  "sha256": "c8d0253f8c5d402fa6112406710d196bf2515e2435f73cb525eb4e137c29ef53",
+  "url": "https://github.com/ventusff/claude-model-guard/releases/download/v1.7.0/model-guard-codex-linux-x86_64.tar.gz",
+  "binary_sha256": "e1c1acc6b0a1b5a53d0a0412a9eab3163b6ca399053698ff583245560e70f161"
 }

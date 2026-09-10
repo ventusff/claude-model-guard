@@ -1,4 +1,4 @@
-"""Allowlisted runtime metadata. Conversation text and credentials never enter state."""
+"""Allowlisted routing metadata of the visible thread. Conversation text never enters state."""
 
 from dataclasses import asdict, dataclass, field
 import re
@@ -12,6 +12,9 @@ MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,159}\Z")
 REPORT = re.compile(
     r"server reported model (\S+) (?:\(matches requested model\)|while requested model was (\S+))\Z"
 )
+DISCLOSURE_SOURCES = ("server-model-log", "model/rerouted", "model/routing/updated")
+SEPARATORS = "-.:_@"
+SIZE_TIERS = {"mini", "nano", "lite", "small", "fast", "flash", "turbo"}
 
 
 def model_id(value):
@@ -27,6 +30,30 @@ def label(value, limit=120):
 
 def number(value):
     return value if type(value) in (int, float) and 0 <= value < 10**15 else None
+
+
+def label_consistent(requested, body_label):
+    """Whether a response body's model label describes the requested model.
+
+    Equal identifiers agree, and so does one identifier extending the other at
+    a separator (`gpt-6-astra` and `gpt-6-astra-2026-09-01`, or the bare family
+    `gpt-6`). A size tier appended to the requested model names a different
+    model. Everything else, including another family, differs. The native TUI
+    applies the same rule.
+    """
+    requested, body_label = requested.casefold(), body_label.casefold()
+    if requested == body_label:
+        return True
+
+    def extension(short, long):
+        if long.startswith(short) and len(long) > len(short) and long[len(short)] in SEPARATORS:
+            return long[len(short) + 1:]
+        return None
+
+    rest = extension(requested, body_label)
+    if rest is not None:
+        return not SIZE_TIERS.intersection(re.split(f"[{re.escape(SEPARATORS)}]", rest))
+    return extension(body_label, requested) is not None
 
 
 @dataclass
@@ -46,13 +73,15 @@ class Thread:
     mismatch_source: str | None = None
     mismatch_at: float | None = None
     mismatch_requested: str | None = None
+    body_label: str | None = None
+    label_mismatch: str | None = None
+    label_mismatch_requested: str | None = None
     context: int | None = None
     sampling: bool = False
     turn_effort: str = ""
     turn_tier: str = ""
     turn_provider: str = "unknown"
     reasoning: Reasoning = field(default_factory=Reasoning)
-    usage_suspended: bool = False
     show_turn_settings: bool = False
     native_routing: bool = False
 
@@ -70,30 +99,37 @@ class Thread:
         if not self.running:
             if self.configured and self.configured != self.requested:
                 self.requested = self.configured
-                self.observed = self.source = self.observed_at = self.mismatch = None
-                self.mismatch_source = self.mismatch_at = None
-                self.mismatch_requested = None
+                self.forget_evidence()
             self.show_turn_settings = False
             self.reasoning.activate((self.requested, self.provider, self.effort, self.tier))
+
+    def forget_evidence(self):
+        self.observed = self.source = self.observed_at = None
+        self.mismatch = self.mismatch_source = self.mismatch_at = self.mismatch_requested = None
+        self.body_label = self.label_mismatch = self.label_mismatch_requested = None
 
     def begin_turn(self, turn_id):
         if self.turn_id != turn_id:
             self.turn_id = turn_id
             self.requested = self.configured or self.requested
-            self.observed = self.source = self.observed_at = self.mismatch = None
-            self.mismatch_source = self.mismatch_at = None
-            self.mismatch_requested = None
+            self.forget_evidence()
             self.sampling = False
             self.turn_effort, self.turn_tier = self.effort, self.tier
             self.turn_provider = self.provider
             self.reasoning.activate(self.reasoning_scope())
             self.reasoning.begin_turn()
-            self.usage_suspended = False
             self.show_turn_settings = True
         self.running = True
 
     def reasoning_scope(self):
         return self.requested, self.turn_provider, self.turn_effort, self.turn_tier
+
+    def begin_request(self, requested):
+        """A new sampling request invalidates the previous request's disclosures."""
+        self.requested = model_id(requested) or self.requested
+        self.observed = self.source = self.observed_at = None
+        self.body_label = None
+        self.reasoning.activate(self.reasoning_scope())
 
     def observe(self, actual, source, expected=None):
         actual = model_id(actual)
@@ -106,20 +142,23 @@ class Thread:
             self.mismatch_source, self.mismatch_at = source, self.observed_at
             self.mismatch_requested = expected
 
+    def observe_label(self, body_label, expected=None):
+        body_label = model_id(body_label)
+        if body_label is None:
+            return
+        self.body_label = body_label
+        expected = model_id(expected) or self.requested
+        if expected and not label_consistent(expected, body_label):
+            self.label_mismatch, self.label_mismatch_requested = body_label, expected
+
 
 @dataclass
 class State:
     threads: dict = field(default_factory=dict)
     selected: str | None = None
-    account: dict | None = None
-    limits: dict = field(default_factory=dict)
     pending: dict = field(default_factory=dict)
     early_logs: dict = field(default_factory=dict)
-    auth_epoch: int = 0
-    limits_at: float = 0
     health: str = "starting"
-    language: str = "en"
-    show_account: bool = True
 
     def thread(self, tid):
         if not isinstance(tid, str) or len(tid) > 120:
@@ -137,14 +176,13 @@ class State:
         method, params = msg.get("method"), msg.get("params") or {}
         if not isinstance(params, dict):
             return
-        if method in ("thread/start", "thread/resume", "thread/fork", "thread/rollback", "account/read"):
+        if method in ("thread/start", "thread/resume", "thread/fork", "thread/rollback"):
             rid = msg.get("id")
             if type(rid) in (str, int) and len(self.pending) < 128:
                 # The TUI also starts hidden feature threads (for example titles).
                 # Their model, effort and usage never describe the visible task.
                 source = params.get("threadSource")
-                visible = source is None or source == "user"
-                self.pending[rid] = (method, self.auth_epoch, visible)
+                self.pending[rid] = (method, source is None or source == "user")
         if method in ("turn/start", "thread/settings/update"):
             thread = self.threads.get(params.get("threadId"))
             if thread:
@@ -154,36 +192,22 @@ class State:
     def server(self, msg):
         rid = msg.get("id")
         pending = self.pending.pop(rid, None) if type(rid) in (str, int) else None
-        method = pending[0] if pending else None
         result = msg.get("result")
-        if method and isinstance(result, dict):
-            if method == "account/read":
-                if pending[1] == self.auth_epoch:
-                    self.set_account(result.get("account"))
-            else:
-                thread_data = result.get("thread") or {}
-                source = thread_data.get("threadSource")
-                if not pending[2] or (source is not None and source != "user"):
-                    return
-                thread = self.thread(thread_data.get("id"))
-                if thread:
-                    self.selected = thread.id
-                    if method != "thread/start":
-                        thread.reasoning.attach()
-                    thread.settings(result)
-                    self.health = "connected"
+        if pending and isinstance(result, dict):
+            method, visible = pending
+            thread_data = result.get("thread") or {}
+            source = thread_data.get("threadSource")
+            if not visible or (source is not None and source != "user"):
+                return
+            thread = self.thread(thread_data.get("id"))
+            if thread:
+                self.selected = thread.id
+                if method != "thread/start":
+                    thread.reasoning.attach()
+                thread.settings(result)
+                self.health = "connected"
         method, params = msg.get("method"), msg.get("params") or {}
         if not isinstance(params, dict):
-            return
-        if method == "account/updated":
-            self.auth_epoch += 1
-            self.account = None
-            self.limits = {}
-            self.reset_reasoning()
-            return
-        if method == "account/rateLimits/updated":
-            # Streaming updates carry no account/turn id and can belong to an
-            # in-flight request before login changed. Use account/rateLimits/read.
             return
         thread = self.threads.get(params.get("threadId"))
         if not thread:
@@ -203,13 +227,12 @@ class State:
             if params.get("turnId") != thread.turn_id or not thread.running:
                 return
             thread.native_routing = True
-            thread.requested = model_id(params.get("requestedModel")) or thread.requested
             thread.turn_provider = label(params.get("modelProvider"), 60)
             thread.turn_effort = label(params.get("reasoningEffort"), 20)
             thread.turn_tier = label(params.get("serviceTier"), 20)
-            thread.observed = thread.source = thread.observed_at = None
-            thread.reasoning.activate(thread.reasoning_scope())
+            thread.begin_request(params.get("requestedModel"))
             thread.observe(params.get("serverModel"), "model/routing/updated", params.get("requestedModel"))
+            thread.observe_label(params.get("responseLabel"), params.get("requestedModel"))
         elif method == "model/rerouted":
             if params.get("turnId") == thread.turn_id:
                 thread.observe(params.get("toModel"), "model/rerouted", params.get("fromModel"))
@@ -221,11 +244,14 @@ class State:
             used = number((usage.get("last") or {}).get("totalTokens"))
             if window and used is not None:
                 thread.context = min(100, round(100 * used / window))
-            if not thread.usage_suspended:
-                thread.reasoning.observe(usage, thread.reasoning_scope())
+            thread.reasoning.observe(usage, thread.reasoning_scope())
 
     def log(self, record):
-        """Only consume authenticated child-process tracing, never assistant text."""
+        """Consume the stock app-server's structured session tracing, never assistant text.
+
+        A native build discloses routing through `model/routing/updated`; these
+        records are the fallback for a stock executable.
+        """
         target = record.get("target", "")
         if not isinstance(target, str) or not target.startswith("codex_core::session"):
             return
@@ -255,54 +281,20 @@ class State:
             if isinstance(turn, str) and len(turn) < 120:
                 if len(self.early_logs) >= 16:
                     self.early_logs.pop(next(iter(self.early_logs)))
-                clean = {"target": target, "fields": {"message": message}, "span": {"name": "try_run_sampling_request" if sampling_start else ""}, "spans": [{k: fields.get(k) for k in ("thread_id", "turn_id", "model")} ]}
+                clean = {"target": target, "fields": {"message": message},
+                         "span": {"name": "try_run_sampling_request" if sampling_start else ""},
+                         "spans": [{k: fields.get(k) for k in ("thread_id", "turn_id", "model")}]}
                 records = self.early_logs.setdefault((thread.id, turn), [])
                 records.append(clean)
                 del records[:-8]
             return
         if sampling_start:
             thread.sampling = True
-            thread.requested = model_id(fields.get("model")) or thread.requested
-            thread.observed = thread.source = thread.observed_at = None
-            thread.reasoning.activate(thread.reasoning_scope())
+            thread.begin_request(fields.get("model"))
             return
         if match:
             expected = match[2] or fields.get("model")
             thread.observe(match[1], "server-model-log", expected)
-
-    def set_account(self, account):
-        clean = None
-        if isinstance(account, dict):
-            kind = account.get("type")
-            if kind in ("chatgpt", "apiKey", "amazonBedrock"):
-                clean = {"type": kind}
-                if kind == "chatgpt":
-                    clean.update(email=label(account.get("email")), plan=label(account.get("planType"), 30))
-        if clean != self.account:
-            self.auth_epoch += 1
-            self.limits = {}
-            self.reset_reasoning()
-        self.account = clean
-
-    def reset_reasoning(self):
-        for thread in self.threads.values():
-            thread.reasoning.reset()
-            # A running response can still belong to the previous login.
-            thread.usage_suspended = thread.running
-
-    def set_limits(self, limits):
-        if not isinstance(limits, dict):
-            return
-        self.limits_at = time.time()
-        fresh = {}
-        for name in ("primary", "secondary"):
-            value = limits.get(name)
-            if not isinstance(value, dict):
-                continue
-            used, minutes = number(value.get("usedPercent")), number(value.get("windowDurationMins"))
-            if used is not None and minutes:
-                fresh[name] = {"used": min(100, used), "minutes": minutes}
-        self.limits = fresh
 
     def snapshot(self):
         thread = self.threads.get(self.selected)
@@ -311,14 +303,4 @@ class State:
             thread_data["reasoning"] = thread.reasoning.summary()
             if thread.show_turn_settings:
                 thread_data.update(provider=thread.turn_provider, effort=thread.turn_effort, tier=thread.turn_tier)
-        account = self.account
-        # account/read is for the server's OpenAI account. It isn't evidence of the
-        # identity billed by an arbitrary custom provider.
-        if thread_data and thread_data["provider"] != "openai":
-            account = None
-        return {
-            "schema": 1, "health": self.health, "updated_at": time.time(),
-            "thread": thread_data,
-            "account": account if self.show_account else None, "account_hidden": not self.show_account,
-            "limits": self.limits if account and time.time() - self.limits_at <= 60 else {},
-        }
+        return {"schema": 2, "health": self.health, "updated_at": time.time(), "thread": thread_data}

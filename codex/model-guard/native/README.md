@@ -1,6 +1,6 @@
 # Native Codex build
 
-Model Guard 1.6 extends the **official Codex 0.153.4 source** at commit
+Model Guard extends the **official Codex 0.153.4 source** at commit
 `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a` (`rust-v0.153.4`).
 It is a custom build maintained by this project, not an official OpenAI release.
 The normal CLI, app-server, authentication, safety policies, terminal event loop,
@@ -14,12 +14,13 @@ and NOTICE. The Model Guard repository remains MIT licensed.
 The native extension adds an experimental `model/routing/updated` notification.
 Its request values are copied from the final Responses request after effort,
 endpoint and service-tier normalization. Effective server model disclosures
-continue to originate in upstream transport parsing. Body `response.model` is
-never a substitute. Metadata is transient and the extension does not write
+continue to originate in upstream transport parsing. The response body's
+`model` label travels separately as `responseLabel`; it never becomes the
+server model. Metadata is transient and the extension does not write
 Codex rollouts or inspect login files.
 
-The TUI shares the existing footer and adds space only for a routing or repeated
-reasoning warning, wrapping it when the terminal is narrow. Normal terminal setup and input handling are unchanged.
+The TUI shares the existing footer and adds space only for a routing, body-label
+or repeated reasoning warning, wrapping it when the terminal is narrow. Normal terminal setup and input handling are unchanged.
 `/status` explains details. Disabling `model-guard` in Codex disables the display.
 A separate remote app-server requires the metadata extension for full evidence.
 
@@ -38,7 +39,7 @@ unaltered official standalone release. Build in a new directory:
 
 ```sh
 python3 build.py \
-  --work-dir "$HOME/.cache/model-guard-build-1.6.0" \
+  --work-dir "$HOME/.cache/model-guard-build-1.7.0" \
   --official-package "$HOME/.codex/packages/standalone/current"
 ```
 
@@ -65,8 +66,9 @@ Run Rust checks with the upstream runner from `source/codex-rs`:
 
 ```sh
 just fmt
+just test -p codex-api -E 'test(process_sse)'
 just test -p codex-core -E 'test(model_routing)'
-just test -p codex-tui -E 'test(native_guard)'
+INSTA_WORKSPACE_ROOT="$PWD" just test -p codex-tui -E 'test(native_guard)'
 INSTA_WORKSPACE_ROOT="$PWD" just test -p codex-app-server-protocol -p codex-tui
 just test
 ```

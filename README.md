@@ -84,15 +84,17 @@ The last step is **interactive** — arrow keys, two questions, done. It copies 
 
 ## Codex CLI
 
-**1.6 uses Codex's native status line.** Model, requested reasoning effort and account share the existing footer. Routing differences and repeated 516-token reasoning signals appear only when observed. Normal use has no extra terminal layer and no permanent warning banner.
+**Model Guard uses Codex's native status line.** Model, requested reasoning effort and account share the existing footer. A disclosed routing difference, a response body labeled with another model, and repeated 516-token reasoning signals appear only when observed. Normal use has no extra terminal layer and no permanent warning banner.
 
 <img src="assets/codex.svg" alt="Illustrative native Codex footer and conditional routing warning" width="880">
 
 Run `codex` or `cx` normally, including `resume` and `fork`. Native input handling, scrollback, paste, resizing, profiles and directory selection remain owned by Codex. Background title generation and agent threads cannot replace the visible conversation's model.
 
-The footer says **selected** until live request metadata arrives; it then says **request**, using the model and effort pinned to that request. An attachment never guesses the settings of a request that started before it subscribed. A disclosed different model shows both names. At high or greater effort, at least three of the last five measured responses with exactly 516 reasoning tokens show a reasoning anomaly warning. Single hits and sample counts are available in **`/status`**. Statistics use unique response IDs and reset when the model, provider, effort, service tier or account changes.
+The footer says **selected** until live request metadata arrives; it then says **request**, using the model and effort pinned to that request. An attachment never guesses the settings of a request that started before it subscribed. A disclosed different model shows both names in red.
 
-These are two distinct signals: effective model metadata records what the server disclosed; 516 is a community heuristic with no calibrated false-positive rate. Neither proves the underlying weights. Missing disclosure is explained in `/status` and does not turn the normal footer yellow. No inference requests, retries or model changes are triggered by passive monitoring. See the [routing research](codex/model-guard/ROUTING.md) for inspected Reddit/GitHub approaches and their limits.
+Every response body also carries a `model` label written by the server. The official client stopped comparing it in February 2026 ([PR #12061](https://github.com/openai/codex/pull/12061)) because slug variants produced false positives, and on a ChatGPT login the effective-model header is usually absent, so the label is the one routing fact the server states on every everyday request. Model Guard keeps it as a **second-tier signal**: a label of the request's own family stays quiet (`gpt-6-astra-2026-09-01`, bare `gpt-6`), while another family or a size tier (`gpt-4o`, `gpt-6-astra-mini`) turns an orange line on under the footer, ranked below the red header difference. `/status` always shows the label. At high or greater effort, at least three of the last five measured responses with exactly 516 reasoning tokens show a reasoning anomaly warning. Single hits and sample counts are available in **`/status`**. Statistics use unique response IDs and reset when the model, provider, effort, service tier or account changes.
+
+These are three distinct signals: the effective-model header and the body label record what the server disclosed, at two levels of trust; 516 is a community heuristic with no calibrated false-positive rate. None of them proves the underlying weights. Missing disclosure is explained in `/status` and does not turn the normal footer yellow. No inference requests, retries or model changes are triggered by passive monitoring. See the [routing research](codex/model-guard/ROUTING.md) for inspected Reddit/GitHub approaches and their limits.
 
 After installing and enabling the Codex plugin from your personal marketplace, install its native runtime:
 
@@ -101,7 +103,9 @@ python3 codex/model-guard/scripts/install.py --language en
 model-guard-codex doctor
 ```
 
-The prebuilt runtime supports **Linux x86_64, glibc 2.39+, Python 3.12+ and the official standalone Codex 0.153.4**. The installer verifies a release checksum, prepares a versioned package and atomically switches the existing `~/.local/bin/codex` symlink. Your next `codex` or `cx resume` invocation picks it up in the current shell. Existing sessions continue on their original executable.
+The prebuilt runtime supports **Linux x86_64, glibc 2.39+, Python 3.12+ and the official standalone Codex 0.153.4**. The installer verifies a release checksum, prepares a versioned package and atomically switches the existing `~/.local/bin/codex` symlink. Your next `codex` or `cx resume` invocation picks it up in the current shell.
+
+A running Codex process keeps the executable it started with, so an open session never gains Model Guard by installation alone; that is how every native program behaves, and no installer can change it. Instead of leaving you to wonder, the installer and `doctor` list the sessions still on another executable, with their directories: finish or `/quit` each one, then `codex resume` there. Earlier versioned packages no session uses any more are removed.
 
 This is a disclosed **custom build of official Codex**, pinned to one source commit, with reviewable patches and a [build recipe](codex/model-guard/native/README.md). Stock Codex does not currently expose a plugin footer renderer. Model Guard adds metadata and native rendering inside that source; it adds no tmux server, terminal proxy, provider proxy or transport logging. Account and quota handling use Codex's existing state. Model/provider defaults and login files are not changed. The supplied package includes the official code-mode host and sandbox helpers from the same release.
 
@@ -111,11 +115,11 @@ Display preferences live in `~/.local/share/model-guard-codex/config.json`: `lan
 
 ```sh
 model-guard-codex probe --json   # A separate read-only request; consumes provider quota
-model-guard-codex doctor        # Verify the installed native executable and active entry
+model-guard-codex doctor        # Verify the native executable and list sessions on another one
 model-guard-codex remove        # Restore the original official executable symlink
 ```
 
-Live session details are accessed inside Codex with `/status`; the old external `status` and `check` commands now direct you there. `probe` accepts `-m MODEL -r EFFORT` for that request only. Its exit codes are `0` for matching effective-model disclosure, `2` for a difference, `3` for missing disclosure, and `4` for an unavailable/failed probe. JSON omits account identity and conversation text. A separate probe cannot certify an existing conversation.
+Live session details are accessed inside Codex with `/status`; the old external `status` and `check` commands now direct you there. `probe` accepts `-m MODEL -r EFFORT` for that request only. Its exit codes are `0` for matching effective-model disclosure, `2` for a difference, `3` for missing disclosure, `4` for an unavailable/failed probe, and `5` for a body label that differs while nothing was disclosed. JSON omits account identity and conversation text. A separate probe cannot certify an existing conversation.
 
 Removal preserves running sessions, packages and preferences. Legacy managed shell blocks are removed during migration; no new shell PATH blocks are needed. Validation uses isolated Codex homes, local HTTP/SSE and WebSocket fixtures, Rust state/layout tests, and real native PTYs. See the build recipe for commands.
 
@@ -210,7 +214,7 @@ The script pads the output with ~300 trailing spaces (or a train of 🚨 in alar
 <details>
 <summary><b>What exactly does <code>setup</code> touch?</b></summary>
 
-- Copies the statusline script to `~/.claude/model-guard.sh`
+- Copies the statusline scripts (`statusline.sh`, `lib.sh`, `text.sh`) to `~/.claude/model-guard/`
 - Writes your answers to `~/.claude/model-guard.conf`
 - Merges a `statusLine` block into `~/.claude/settings.json` — after making a timestamped backup, without touching any other key
 - If you had a different statusline before, it's saved and **restored on uninstall**
@@ -223,7 +227,7 @@ The script pads the output with ~300 trailing spaces (or a train of 🚨 in alar
 /model-guard:remove
 ```
 
-Unregisters the statusline (restoring whatever you had before), optionally deletes the script, config and per-session state, and keeps a settings backup. Then remove the plugin itself via `/plugin` if you want — the recovery hooks live in the plugin and go with it.
+Unregisters the statusline (restoring whatever you had before), optionally deletes the scripts, config and per-session state, and keeps a settings backup. Then remove the plugin itself via `/plugin` if you want — the recovery hooks live in the plugin and go with it.
 
 ## License
 

@@ -1,13 +1,13 @@
 ---
 name: setup
-description: Interactive setup for model-guard — asks three quick preference questions (band language, account display, auto-recovery), copies the statusline script, registers the statusLine in ~/.claude/settings.json (with a timestamped backup) and checks the keystroke channel the recovery hooks need. Safe to re-run anytime to change options or to refresh after a plugin update.
+description: Interactive setup for model-guard — asks three quick preference questions (band language, account display, auto-recovery), installs the statusline scripts, registers the statusLine in ~/.claude/settings.json (with a timestamped backup) and checks the keystroke channel the recovery hooks need. Safe to re-run anytime to change options or to refresh after a plugin update.
 argument-hint: "(no arguments)"
 ---
 
 # model-guard: interactive setup
 
 You are installing (or reconfiguring) model-guard for this user: the statusline
-script and the auto-recovery hooks' configuration.
+scripts and the auto-recovery hooks' configuration.
 
 Plugin root: `${CLAUDE_PLUGIN_ROOT}`
 (If the path above looks like an unexpanded shell variable instead of a real
@@ -15,7 +15,7 @@ directory, locate the plugin root via `claude plugin list --json` or by finding
 `*/model-guard/scripts/statusline.sh` under `~/.claude/plugins/`.)
 
 Target paths — use exactly these:
-- script:   `~/.claude/model-guard.sh`
+- scripts:  `~/.claude/model-guard/` (`statusline.sh`, `lib.sh`, `text.sh`)
 - config:   `~/.claude/model-guard.conf`
 - register: the `statusLine` key in `~/.claude/settings.json`
 
@@ -63,8 +63,12 @@ Question 4 — header "Existing bar": "Replace (keep restorable backup)" /
 
 ## 3. Install files
 
-- Copy `${CLAUDE_PLUGIN_ROOT}/scripts/statusline.sh` → `~/.claude/model-guard.sh`, `chmod +x` it.
-- Write `~/.claude/model-guard.conf` with the two answers, **preserving** any
+- `mkdir -p ~/.claude/model-guard`, then copy `${CLAUDE_PLUGIN_ROOT}/scripts/statusline.sh`,
+  `${CLAUDE_PLUGIN_ROOT}/scripts/lib.sh` and `${CLAUDE_PLUGIN_ROOT}/scripts/text.sh` into it and
+  `chmod +x` them. The statusline sources its two neighbours, so all three must be present.
+- If a flat `~/.claude/model-guard.sh` from an earlier install exists, delete it: the
+  `statusLine` registered in step 4 points at the directory.
+- Write `~/.claude/model-guard.conf` with the answers, **preserving** any
   unrelated existing keys (`SETUP_HINT`, `PREV_STATUSLINE_B64`, `EXPECTED_MODEL`,
   `SHOW_CONTEXT`, `SHOW_LIMIT`, `LIMIT_WARN_AT`):
 
@@ -106,7 +110,7 @@ override — auto-detection from the settings.json `model` field is the default.
 - Merge without touching other keys:
 
 ```bash
-jq '.statusLine={"type":"command","command":"'"$HOME"'/.claude/model-guard.sh","padding":0,"refreshInterval":5}' \
+jq '.statusLine={"type":"command","command":"'"$HOME"'/.claude/model-guard/statusline.sh","padding":0,"refreshInterval":5}' \
   ~/.claude/settings.json > ~/.claude/settings.json.tmp && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
 ```
 
@@ -117,9 +121,9 @@ jq '.statusLine={"type":"command","command":"'"$HOME"'/.claude/model-guard.sh","
 Run both and let the raw ANSI output render in the terminal (band colors included):
 
 1. Normal state — use the user's actual pinned model id so it renders green:
-   `echo '{"model":{"id":"<pinned-model-id>","display_name":"<name>"},"effort":{"level":"xhigh"},"thinking":{"enabled":true},"context_window":{"used_percentage":12}}' | ~/.claude/model-guard.sh`
+   `echo '{"model":{"id":"<pinned-model-id>","display_name":"<name>"},"effort":{"level":"xhigh"},"thinking":{"enabled":true},"context_window":{"used_percentage":12}}' | ~/.claude/model-guard/statusline.sh`
 2. Downgrade drill — must render the full red alarm band:
-   `echo '{"model":{"id":"claude-haiku-4-5","display_name":"Haiku 4.5"}}' | ~/.claude/model-guard.sh`
+   `echo '{"model":{"id":"claude-haiku-4-5","display_name":"Haiku 4.5"}}' | ~/.claude/model-guard/statusline.sh`
 
 If the drill does not come out as an alarm (e.g. the user's `model` is `default`,
 so there is no expectation), explain that and point at `EXPECTED_MODEL` in the conf.
@@ -138,7 +142,7 @@ so there is no expectation), explain that and point at `EXPECTED_MODEL` in the c
   later fixes arrive without a manual update.
 - Re-run `/model-guard:setup` anytime to change options. After a plugin update there
   is nothing to re-run: the session-start hook refreshes the installed statusline
-  script itself.
+  scripts itself.
 - `/model-guard:remove` uninstalls cleanly and restores any previous statusline.
 - Advanced knobs live in `~/.claude/model-guard.conf`: `LANGUAGE`, `SHOW_ACCOUNT`,
   `SHOW_CONTEXT`, `SHOW_LIMIT` (the account's 5h/7d usage in the band, default true),

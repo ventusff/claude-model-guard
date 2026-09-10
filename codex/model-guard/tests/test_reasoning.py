@@ -105,7 +105,6 @@ class ReasoningTests(unittest.TestCase):
 class ReasoningStateTests(unittest.TestCase):
     def setUp(self):
         self.state = State(health="connected")
-        self.state.set_account({"type": "chatgpt", "email": "private@example.com", "planType": "pro"})
         self.thread = self.state.thread("t")
         self.state.selected = "t"
         self.thread.settings({"model": "gpt-6-astra", "modelProvider": "openai", "effort": "high"})
@@ -124,7 +123,6 @@ class ReasoningStateTests(unittest.TestCase):
         self.assertEqual(result["exit_code"], 3)
         self.assertEqual(result["reasoning"]["alert"], "suspect")
         self.assertIsNone(result["server_reported"])
-        self.assertNotIn("private", str(result))
         self.assertNotIn("scope", result["reasoning"])
         self.assertEqual((result["reasoning"]["recent_516"], result["reasoning"]["recent_samples"]), (3, 5))
 
@@ -165,22 +163,11 @@ class ReasoningStateTests(unittest.TestCase):
         self.thread.begin_turn("next")
         self.assertEqual(self.thread.reasoning.summary()["samples"], 0)
 
-    def test_future_openai_provider_cannot_expose_account_on_custom_turn(self):
-        self.thread.settings({"modelProvider": "custom"})
-        self.thread.begin_turn("custom-turn")
-        self.event("thread/settings/updated", threadSettings={"modelProvider": "openai"})
-        self.assertIsNone(self.state.snapshot()["account"])
-        self.event("turn/completed", turn={"id": "custom-turn"})
-        self.assertIsNone(self.state.snapshot()["account"])
-        self.thread.begin_turn("openai-turn")
-        self.assertIsNotNone(self.state.snapshot()["account"])
-
     def test_completed_turn_retains_measured_settings_until_idle_selection(self):
         for index in range(1, 6):
             self.count(index=index)
         self.event("thread/settings/updated", threadSettings={"effort": "low", "serviceTier": "fast"})
         self.event("turn/completed", turn={"id": "turn"})
-        self.assertEqual(self.state.snapshot()["thread"]["effort"], "high")
         self.assertEqual(self.state.snapshot()["thread"]["effort"], "high")
         self.assertNotEqual(self.state.snapshot()["thread"]["tier"], "fast")
         self.event("thread/settings/updated", threadSettings={"effort": "low", "serviceTier": "fast"})
@@ -196,17 +183,6 @@ class ReasoningStateTests(unittest.TestCase):
                 self.assertEqual(self.thread.reasoning.summary()["samples"], 0)
                 self.count(index=2)
                 self.assertEqual(self.thread.reasoning.summary()["samples"], 1)
-
-    def test_login_change_quarantines_inflight_usage(self):
-        self.count()
-        self.state.set_account({"type": "chatgpt", "email": "new@example.com", "planType": "pro"})
-        self.count(index=2)
-        self.assertEqual(self.thread.reasoning.summary()["samples"], 0)
-        self.thread.begin_turn("next")
-        self.event("thread/tokenUsage/updated", turnId="next", tokenUsage=usage(0, 12000))
-        self.event("thread/tokenUsage/updated", turnId="next", tokenUsage=usage(0, 16000))
-        self.assertEqual(self.thread.reasoning.summary()["samples"], 1)
-        self.assertEqual(self.thread.reasoning.summary()["exact_516"], 0)
 
     def test_disclosed_mismatch_keeps_strict_exit_code(self):
         self.count()

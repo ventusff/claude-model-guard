@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from model_guard.check import ProbeReader, verdict
+from model_guard.check import ProbeReader, format_result, verdict
 from model_guard.state import State
 
 
@@ -19,14 +19,13 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(verdict(state.snapshot())["exit_code"], 3)
         self.assertEqual(verdict({})["exit_code"], 4)
 
-    def test_check_export_does_not_include_account(self):
+    def test_export_carries_routing_fields_only(self):
         state, thread = self.state()
-        state.set_account({"type": "chatgpt", "email": "private@example.com", "planType": "pro"})
         thread.observe("gpt-6-astra", "server-model-log")
         result = verdict(state.snapshot())
         self.assertEqual(result["exit_code"], 0)
-        self.assertNotIn("private", str(result))
         self.assertFalse(result["weights_verified"])
+        self.assertFalse({"account", "email", "plan", "limits"} & set(result))
 
     def test_mismatch_keeps_its_provenance_after_new_sampling(self):
         state, thread = self.state()
@@ -52,6 +51,16 @@ class CheckTests(unittest.TestCase):
         for source in ("response.model", "synthetic-demo", "model-self-identification"):
             thread.observe("gpt-6-astra", source)
             self.assertEqual(verdict(state.snapshot())["exit_code"], 3)
+
+    def test_body_label_lines_in_the_text_report(self):
+        state, thread = self.state()
+        self.assertIn("Body label: none", format_result(verdict(state.snapshot())))
+        thread.observe_label("gpt-6-astra-2026-09-01")
+        self.assertIn("Body label: gpt-6-astra-2026-09-01 (consistent with the request)", format_result(verdict(state.snapshot())))
+        thread.observe_label("gpt-4o")
+        text = format_result(verdict(state.snapshot()))
+        self.assertIn("Routing: label_mismatch", text)
+        self.assertIn("Body label: gpt-4o (differs from the request)", text)
 
 
 class FakeSocket:

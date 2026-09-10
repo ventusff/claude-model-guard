@@ -1324,7 +1324,7 @@ index e217b70..ca93c94 100644
   "anyhow",
   "codex-login",
 diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
-index 71d0323..2b7896e 100644
+index 71d0323..e6fe160 100644
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
 @@ -102,7 +102,7 @@ use codex_terminal_detection::TerminalName;
@@ -1332,7 +1332,7 @@ index 71d0323..2b7896e 100644
  #[clap(
      author,
 -    version,
-+    version = concat!(env!("CARGO_PKG_VERSION"), "+model-guard.1.6.0"),
++    version = concat!(env!("CARGO_PKG_VERSION"), "+model-guard.1.7.0"),
      // If a sub‑command is given, ignore requirements of the default args.
      subcommand_negates_reqs = true,
      // The executable is sometimes invoked via a platform‑specific name like

@@ -4,21 +4,22 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 import hashlib
-import platform
-import tarfile
-import tempfile
-import urllib.request
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
+import urllib.request
 import uuid
 import venv
 
-from . import __version__
+from . import __version__, sessions
 from .launcher import atomic_json, data_home
 
 
@@ -128,6 +129,38 @@ def remove_legacy(root, state, changed=None):
                 changed.append((path, before, None, mode))
 
 
+def prune(root, keep):
+    """Delete versioned packages and environments that nothing references.
+
+    `keep` holds the resolved directories of the active installation. Only
+    real directories inside the installation root are candidates, and a
+    directory some running process executes from (a Codex session, or a
+    helper running from one of the Python environments) is kept until that
+    process ends, because it keeps reading its own files. The `current` link
+    of the earlier launcher layout is removed once nothing needs it.
+    """
+    root = root.resolve()
+    in_use = [executable.resolve() for executable in sessions.executables()]
+    removed = []
+    for parent in (root / "envs", root / "native"):
+        if parent.is_symlink() or not parent.is_dir():
+            continue
+        for child in sorted(parent.iterdir()):
+            if child.is_symlink() or not child.is_dir() or child.stat().st_uid != os.getuid():
+                continue
+            resolved = child.resolve()
+            if not resolved.is_relative_to(root) or resolved in keep:
+                continue
+            if any(executable.is_relative_to(resolved) for executable in in_use):
+                continue
+            shutil.rmtree(child)
+            removed.append(child)
+    current = root / "current"
+    if current.is_symlink():
+        current.unlink()
+    return removed
+
+
 def install(source, language=None, native_package=None, entry=None):
     with installation_lock():
         return install_locked(source, language, native_package, entry)
@@ -235,7 +268,15 @@ def install_locked(source, language, native_package, entry):
         if published and not state_path.is_symlink() and state_path.is_file() and state_path.read_bytes() == published_bytes:
             atomic_json(state_path, previous)
         raise
-    print(f"Installed native Model Guard {__version__}. codex and cx use it immediately, including resume and fork.")
+    removed = prune(root, {package.resolve(), environment.resolve()})
+    print(f"Installed native Model Guard {__version__}. New codex and cx invocations use it, including resume and fork.")
+    if removed:
+        print(f"Removed {len(removed)} unused earlier package(s) and environment(s).")
+    stale = sessions.not_running(package / "bin/codex")
+    if stale:
+        print(f"{len(stale)} running Codex session(s) keep their current executable and do not show Model Guard. "
+              "Finish or /quit each one, then `codex resume` in its directory:")
+        print(sessions.describe(stale))
     return 0
 
 

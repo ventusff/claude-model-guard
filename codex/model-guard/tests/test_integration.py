@@ -1,4 +1,4 @@
-"""Exercise the installed official Codex against an isolated local Responses fixture."""
+"""Exercise the installed Codex against an isolated local Responses fixture."""
 
 import asyncio
 from contextlib import AsyncExitStack
@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -22,10 +23,18 @@ from model_guard.state import State
 
 
 class ResponsesFixture:
-    def __init__(self, model, reasoning=None, output_text="OK"):
+    """A Responses endpoint that discloses `model` through a header and labels the body.
+
+    `model` is the effective-model header (None omits it). `label` is the
+    `model` field written into the response body; it defaults to the model the
+    tests request, so a fixture only claims another model on purpose.
+    """
+
+    def __init__(self, model, reasoning=None, output_text="OK", label="gpt-6-astra"):
         self.model, self.requests = model, []
         self.reasoning = reasoning or [0]
         self.output_text = output_text
+        self.label = label
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -54,9 +63,9 @@ class ResponsesFixture:
         response_id = f"resp_test_{index}"
         item = {"id": "msg_test", "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": self.output_text}]}
         return [
-            {"type": "response.created", "response": {"id": response_id, "model": "gpt-4o"}},
+            {"type": "response.created", "response": {"id": response_id, "model": self.label}},
             {"type": "response.output_item.done", "output_index": 0, "item": item},
-            {"type": "response.completed", "response": {"id": response_id, "status": "completed", "output": [item], "usage": {"input_tokens": 20, "output_tokens": tokens + 1, "output_tokens_details": {"reasoning_tokens": tokens}, "total_tokens": tokens + 21}}},
+            {"type": "response.completed", "response": {"id": response_id, "model": self.label, "status": "completed", "output": [item], "usage": {"input_tokens": 20, "output_tokens": tokens + 1, "output_tokens_details": {"reasoning_tokens": tokens}, "total_tokens": tokens + 21}}},
         ]
 
     async def websocket(self, ws):
@@ -80,11 +89,26 @@ class ResponsesFixture:
         self.worker.join()
 
 
-@unittest.skipUnless(os.environ.get("MODEL_GUARD_INTEGRATION") == "1", "set MODEL_GUARD_INTEGRATION=1 to exercise stock Codex")
+# Codex syncs its curated plugin marketplace at startup: git, then two HTTP fallbacks,
+# each with a 30 s timeout. These settings make every remote attempt fail at once while
+# the loopback fixture stays reachable, so a slow link cannot stall a test.
+OFFLINE = {"GIT_ALLOW_PROTOCOL": "file", "HTTPS_PROXY": "http://127.0.0.1:9", "NO_PROXY": "127.0.0.1,localhost"}
+
+
+def codex_binary():
+    return os.environ.get("MODEL_GUARD_CODEX_BIN") or shutil.which("codex")
+
+
+def native_build():
+    """Whether the binary under test discloses routing through `model/routing/updated`."""
+    return "+model-guard." in subprocess.check_output([codex_binary(), "--version"], text=True)
+
+
+@unittest.skipUnless(os.environ.get("MODEL_GUARD_INTEGRATION") == "1", "set MODEL_GUARD_INTEGRATION=1 to exercise the installed Codex")
 class OfficialCodexTests(unittest.IsolatedAsyncioTestCase):
-    async def exercise(self, observed, websocket=False, probe_mode=False, reasoning=None, hidden_title=False):
-        binary = os.environ.get("MODEL_GUARD_CODEX_BIN") or shutil.which("codex")
-        with tempfile.TemporaryDirectory(prefix="mg-test-") as temp, ResponsesFixture(observed, reasoning) as api:
+    async def exercise(self, observed, websocket=False, probe_mode=False, reasoning=None, hidden_title=False, label="gpt-6-astra"):
+        binary = codex_binary()
+        with tempfile.TemporaryDirectory(prefix="mg-test-") as temp, ResponsesFixture(observed, reasoning, label=label) as api:
             base = Path(temp)
             codex_home = base / "codex"
             codex_home.mkdir()
@@ -110,13 +134,18 @@ class OfficialCodexTests(unittest.IsolatedAsyncioTestCase):
             relay = Relay(cmd, state, temp)
             clean_env = {k: v for k, v in os.environ.items() if not k.startswith(("OPENAI_", "CODEX_"))}
             clean_env["CODEX_HOME"] = str(codex_home)
+            clean_env.update(OFFLINE)
+            expected_code = 3 if observed is None else 2 if observed == "gpt-4o" else 0
+            if observed is None and label == "gpt-4o":
+                expected_code = 5
             with patch.dict(os.environ, clean_env, clear=True):
                 if probe_mode:
                     try:
                         result = await probe(binary, model="gpt-6-astra", cwd=temp, options=cmd[1:-2])
-                        self.assertEqual(result["exit_code"], 3 if observed is None else 2 if observed == "gpt-4o" else 0, str(result))
+                        self.assertEqual(result["exit_code"], expected_code, str(result))
                         self.assertEqual(result["scope"], "separate_probe")
                         self.assertEqual(result["server_reported"], observed)
+                        self.assertEqual(result["body_label"], label)
                         self.assertNotIn("account", result)
                     finally:
                         await stack.aclose()
@@ -153,8 +182,9 @@ class OfficialCodexTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(state.snapshot()["thread"], snapshot["thread"])
                         self.assertEqual(state.selected, tid)
                     self.assertEqual(snapshot["thread"]["observed"], observed, str(snapshot))
-                    self.assertIsNone(snapshot["account"])
                     self.assertEqual(snapshot["thread"]["mismatch"], observed if observed == "gpt-4o" else None)
+                    self.assertEqual(snapshot["thread"]["body_label"], label)
+                    self.assertEqual(snapshot["thread"]["label_mismatch"], label if label == "gpt-4o" else None)
                     if reasoning:
                         signal = snapshot["thread"]["reasoning"]
                         self.assertEqual(signal["samples"], len(reasoning))
@@ -182,8 +212,19 @@ class OfficialCodexTests(unittest.IsolatedAsyncioTestCase):
     async def test_header_routes_to_gpt4o(self):
         await self.exercise("gpt-4o")
 
-    async def test_response_model_without_header_is_unverified(self):
-        await self.exercise(None)
+    async def test_consistent_body_label_without_header_is_unverified(self):
+        await self.exercise(None, label="gpt-6-astra-2026-09-01")
+
+    async def test_body_label_of_another_family_without_header_is_a_label_mismatch(self):
+        if not native_build():
+            self.skipTest("a stock executable does not disclose the body label")
+        await self.exercise(None, label="gpt-4o")
+
+    async def test_header_outranks_a_body_label_in_either_direction(self):
+        if not native_build():
+            self.skipTest("a stock executable does not disclose the body label")
+        await self.exercise("gpt-6-astra", label="gpt-4o")
+        await self.exercise("gpt-4o", websocket=True, label="gpt-6-astra")
 
     async def test_websocket_metadata_confirms_model(self):
         await self.exercise("gpt-6-astra", websocket=True)
@@ -202,6 +243,11 @@ class OfficialCodexTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_standalone_probe_cannot_pass_without_evidence(self):
         await self.exercise(None, probe_mode=True)
+
+    async def test_standalone_probe_reports_a_body_label_mismatch(self):
+        if not native_build():
+            self.skipTest("a stock executable does not disclose the body label")
+        await self.exercise(None, websocket=True, probe_mode=True, label="gpt-4o")
 
     async def test_sse_reasoning_signal_without_model_disclosure(self):
         await self.exercise(None, reasoning=[516, 0, 516, 2000, 516])

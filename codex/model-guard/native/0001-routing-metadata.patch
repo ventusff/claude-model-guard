@@ -12,10 +12,10 @@ index 6c00f88..1ec3c6e 100644
      AuthRecoveryStarted => "modelProvider/authRecoveryStarted" (v2::AuthRecoveryNotification),
      AuthRecoveryCompleted => "modelProvider/authRecoveryCompleted" (v2::AuthRecoveryNotification),
 diff --git a/codex-rs/app-server-protocol/src/protocol/v2/model.rs b/codex-rs/app-server-protocol/src/protocol/v2/model.rs
-index f59451e..0d831fc 100644
+index f59451e..00064af 100644
 --- a/codex-rs/app-server-protocol/src/protocol/v2/model.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/v2/model.rs
-@@ -162,6 +162,21 @@ pub struct ModelReroutedNotification {
+@@ -162,6 +162,22 @@ pub struct ModelReroutedNotification {
      pub reason: ModelRerouteReason,
  }
  
@@ -29,6 +29,7 @@ index f59451e..0d831fc 100644
 +    pub request_id: String,
 +    pub requested_model: String,
 +    pub server_model: Option<String>,
++    pub response_label: Option<String>,
 +    pub model_provider: String,
 +    pub reasoning_effort: Option<String>,
 +    pub service_tier: Option<String>,
@@ -38,10 +39,10 @@ index f59451e..0d831fc 100644
  #[serde(rename_all = "camelCase")]
  #[ts(export_to = "v2/")]
 diff --git a/codex-rs/app-server/src/bespoke_event_handling.rs b/codex-rs/app-server/src/bespoke_event_handling.rs
-index 91cda28..3b4bd5f 100644
+index 91cda28..701f60a 100644
 --- a/codex-rs/app-server/src/bespoke_event_handling.rs
 +++ b/codex-rs/app-server/src/bespoke_event_handling.rs
-@@ -410,6 +410,21 @@ pub(crate) async fn apply_bespoke_event_handling(
+@@ -410,6 +410,22 @@ pub(crate) async fn apply_bespoke_event_handling(
                  .send_server_notification(ServerNotification::ModelRerouted(notification))
                  .await;
          }
@@ -52,6 +53,7 @@ index 91cda28..3b4bd5f 100644
 +                request_id: event.request_id,
 +                requested_model: event.requested_model,
 +                server_model: event.server_model,
++                response_label: event.response_label,
 +                model_provider: event.model_provider,
 +                reasoning_effort: event.reasoning_effort,
 +                service_tier: event.service_tier,
@@ -75,6 +77,128 @@ index 844a312..2c04527 100644
          | ServerNotification::ModelVerification(_)
          | ServerNotification::AuthRecoveryStarted(_)
          | ServerNotification::AuthRecoveryCompleted(_)
+diff --git a/codex-rs/codex-api/src/common.rs b/codex-rs/codex-api/src/common.rs
+index 5adfe8d..54c2baf 100644
+--- a/codex-rs/codex-api/src/common.rs
++++ b/codex-rs/codex-api/src/common.rs
+@@ -103,6 +103,10 @@ pub enum ResponseEvent {
+     /// Emitted when the server includes `OpenAI-Model` on the stream response.
+     /// This can differ from the requested model when backend safety routing applies.
+     ServerModel(String),
++    /// Emitted when the response body carries a `model` label. The server
++    /// writes it, but it is not the effective-model header: it is
++    /// informational and never selects or verifies a model.
++    ResponseModelLabel(String),
+     /// Emitted when the server recommends additional account verification.
+     ModelVerifications(Vec<ModelVerification>),
+     /// Emitted when the server includes moderation metadata for first-party turn presentation.
+diff --git a/codex-rs/codex-api/src/endpoint/responses_websocket.rs b/codex-rs/codex-api/src/endpoint/responses_websocket.rs
+index 95d41e0..1bf9358 100644
+--- a/codex-rs/codex-api/src/endpoint/responses_websocket.rs
++++ b/codex-rs/codex-api/src/endpoint/responses_websocket.rs
+@@ -692,6 +692,7 @@ async fn run_websocket_response_stream(
+     timing_log_context: &ResponsesWebsocketTimingLogContext,
+ ) -> Result<(), ApiError> {
+     let mut last_server_model: Option<String> = None;
++    let mut last_model_label: Option<String> = None;
+     let mut safety_buffering_treatment = SafetyBufferingTreatment::default();
+     send_websocket_request(
+         ws_stream,
+@@ -784,6 +785,14 @@ async fn run_websocket_response_stream(
+                         .await;
+                     last_server_model = Some(model);
+                 }
++                if let Some(label) = event.response_model_label()
++                    && last_model_label.as_deref() != Some(label.as_str())
++                {
++                    let _ = tx_event
++                        .send(Ok(ResponseEvent::ResponseModelLabel(label.clone())))
++                        .await;
++                    last_model_label = Some(label);
++                }
+                 if let Some(verifications) = model_verifications
+                     && tx_event
+                         .send(Ok(ResponseEvent::ModelVerifications(verifications)))
+diff --git a/codex-rs/codex-api/src/sse/responses.rs b/codex-rs/codex-api/src/sse/responses.rs
+index abef246..639b8f2 100644
+--- a/codex-rs/codex-api/src/sse/responses.rs
++++ b/codex-rs/codex-api/src/sse/responses.rs
+@@ -216,6 +216,16 @@ impl ResponsesStreamEvent {
+         }
+     }
+ 
++    /// Returns the `model` label written into the response body, if any.
++    pub fn response_model_label(&self) -> Option<String> {
++        self.response
++            .as_ref()
++            .and_then(|response| response.get("model"))
++            .and_then(Value::as_str)
++            .filter(|label| !label.is_empty())
++            .map(str::to_owned)
++    }
++
+     pub(crate) fn turn_state(&self) -> Option<String> {
+         if self.kind() != "response.metadata" {
+             return None;
+@@ -571,6 +581,7 @@ async fn process_sse_with_treatment(
+     let mut stream = stream.eventsource();
+     let mut response_error: Option<ApiError> = None;
+     let mut last_server_model: Option<String> = None;
++    let mut last_model_label: Option<String> = None;
+ 
+     loop {
+         let start = Instant::now();
+@@ -631,6 +642,18 @@ async fn process_sse_with_treatment(
+             }
+             last_server_model = Some(model);
+         }
++        if let Some(label) = event.response_model_label()
++            && last_model_label.as_deref() != Some(label.as_str())
++        {
++            if tx_event
++                .send(Ok(ResponseEvent::ResponseModelLabel(label.clone())))
++                .await
++                .is_err()
++            {
++                return;
++            }
++            last_model_label = Some(label);
++        }
+         if let Some(verifications) = model_verifications
+             && tx_event
+                 .send(Ok(ResponseEvent::ModelVerifications(verifications)))
+@@ -1558,7 +1581,7 @@ mod tests {
+     }
+ 
+     #[tokio::test]
+-    async fn process_sse_ignores_response_model_field_in_payload() {
++    async fn process_sse_reports_response_model_field_as_label_only() {
+         let events = run_sse(vec![
+             json!({
+                 "type": "response.created",
+@@ -1577,10 +1600,19 @@ mod tests {
+         ])
+         .await;
+ 
+-        assert_eq!(events.len(), 2);
+-        assert_matches!(&events[0], ResponseEvent::Created);
++        assert_eq!(events.len(), 3);
++        assert!(
++            !events
++                .iter()
++                .any(|event| matches!(event, ResponseEvent::ServerModel(_)))
++        );
+         assert_matches!(
+-            &events[1],
++            &events[0],
++            ResponseEvent::ResponseModelLabel(label) if label == CYBER_RESTRICTED_MODEL_FOR_TESTS
++        );
++        assert_matches!(&events[1], ResponseEvent::Created);
++        assert_matches!(
++            &events[2],
+             ResponseEvent::Completed {
+                 response_id,
+                 token_usage: None,
 diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
 index 9f03c93..2c64f4c 100644
 --- a/codex-rs/core/src/client.rs
@@ -190,10 +314,10 @@ index f2d6be2..e9247ed 100644
      /// provider stream reached its own terminal event.
 diff --git a/codex-rs/core/src/client_routing.rs b/codex-rs/core/src/client_routing.rs
 new file mode 100644
-index 0000000..e816b8f
+index 0000000..c489198
 --- /dev/null
 +++ b/codex-rs/core/src/client_routing.rs
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,38 @@
 +//! Allowlisted routing metadata copied from the final outgoing request.
 +use super::*;
 +use codex_protocol::protocol::ModelRoutingEvent;
@@ -210,6 +334,7 @@ index 0000000..e816b8f
 +            request_id: Uuid::new_v4().to_string(),
 +            requested_model: request.model.clone(),
 +            server_model: None,
++            response_label: None,
 +            model_provider: model_provider.clone(),
 +            reasoning_effort: request
 +                .reasoning
@@ -256,7 +381,7 @@ index 6d1953e..767af84 100644
                  executed_tool_calls: executed_tool_calls.clone(),
                  code_mode_service: crate::tools::code_mode::CodeModeService::new(
 diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
-index f7c4268..d275d5c 100644
+index f7c4268..00726eb 100644
 --- a/codex-rs/core/src/session/turn.rs
 +++ b/codex-rs/core/src/session/turn.rs
 @@ -1828,6 +1828,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
@@ -287,6 +412,34 @@ index f7c4268..d275d5c 100644
                  if !turn_context
                      .server_model_warning_emitted
                      .load(Ordering::Relaxed)
+@@ -2546,6 +2553,15 @@ async fn try_run_sampling_request(
+                         .store(true, Ordering::Relaxed);
+                 }
+             }
++            ResponseEvent::ResponseModelLabel(label) => {
++                if let Some(routing) = routing.as_mut()
++                    && routing.response_label.as_deref() != Some(label.as_str())
++                {
++                    routing.response_label = Some(label);
++                    sess.send_event(&turn_context, EventMsg::ModelRouting(routing.clone()))
++                        .await;
++                }
++            }
+             ResponseEvent::ModelVerifications(verifications) => {
+                 if !turn_context
+                     .model_verification_emitted
+diff --git a/codex-rs/core/src/turn_timing.rs b/codex-rs/core/src/turn_timing.rs
+index 87f7798..04d9592 100644
+--- a/codex-rs/core/src/turn_timing.rs
++++ b/codex-rs/core/src/turn_timing.rs
+@@ -387,6 +387,7 @@ fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
+         | ResponseEvent::ReasoningContentDelta { .. } => true,
+         ResponseEvent::Created
+         | ResponseEvent::ServerModel(_)
++        | ResponseEvent::ResponseModelLabel(_)
+         | ResponseEvent::ModelVerifications(_)
+         | ResponseEvent::TurnModerationMetadata(_)
+         | ResponseEvent::SafetyBuffering(_)
 diff --git a/codex-rs/core/tests/suite/mod.rs b/codex-rs/core/tests/suite/mod.rs
 index 8d43ca0..27934a4 100644
 --- a/codex-rs/core/tests/suite/mod.rs
@@ -301,10 +454,10 @@ index 8d43ca0..27934a4 100644
  mod model_visible_layout;
 diff --git a/codex-rs/core/tests/suite/model_routing.rs b/codex-rs/core/tests/suite/model_routing.rs
 new file mode 100644
-index 0000000..9b9dd08
+index 0000000..409284b
 --- /dev/null
 +++ b/codex-rs/core/tests/suite/model_routing.rs
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,93 @@
 +//! Routing disclosures are metadata, not a model identity attestation.
 +use anyhow::Result;
 +use codex_core::TurnInputRequest;
@@ -368,13 +521,16 @@ index 0000000..9b9dd08
 +        (&"gpt-6-astra".to_string(), None)
 +    );
 +    assert!(!first.request_id.is_empty());
-+    let expected: Vec<_> = std::iter::once(None)
-+        .chain(header.map(|value| Some(value.to_string())))
-+        .collect();
++    // The body label is reported on its own; it never becomes the server model.
++    let mut expected = vec![(None, None)];
++    if let Some(header) = header {
++        expected.push((Some(header.to_string()), None));
++    }
++    expected.push((header.map(str::to_string), Some("gpt-4o".to_string())));
 +    assert_eq!(
 +        routing
 +            .iter()
-+            .map(|r| r.server_model.clone())
++            .map(|r| (r.server_model.clone(), r.response_label.clone()))
 +            .collect::<Vec<_>>(),
 +        expected
 +    );
@@ -407,8 +563,20 @@ index fdc32c3..d6cc1ac 100644
                      | EventMsg::ThreadRolledBack(_)
                      | EventMsg::CollabAgentSpawnBegin(_)
                      | EventMsg::CollabAgentSpawnEnd(_)
+diff --git a/codex-rs/otel/src/events/session_telemetry.rs b/codex-rs/otel/src/events/session_telemetry.rs
+index 7174bd8..db0f5f3 100644
+--- a/codex-rs/otel/src/events/session_telemetry.rs
++++ b/codex-rs/otel/src/events/session_telemetry.rs
+@@ -1284,6 +1284,7 @@ impl SessionTelemetry {
+                 "reasoning_summary_part_added".into()
+             }
+             ResponseEvent::ServerModel(_) => "server_model".into(),
++            ResponseEvent::ResponseModelLabel(_) => "response_model_label".into(),
+             ResponseEvent::ModelVerifications(_) => "model_verifications".into(),
+             ResponseEvent::TurnModerationMetadata(_) => "turn_moderation_metadata".into(),
+             ResponseEvent::SafetyBuffering(_) => "safety_buffering".into(),
 diff --git a/codex-rs/protocol/src/protocol.rs b/codex-rs/protocol/src/protocol.rs
-index ae2107b..1799e76 100644
+index ae2107b..464a673 100644
 --- a/codex-rs/protocol/src/protocol.rs
 +++ b/codex-rs/protocol/src/protocol.rs
 @@ -1385,6 +1385,9 @@ pub enum EventMsg {
@@ -421,19 +589,22 @@ index ae2107b..1799e76 100644
      /// Backend recommends additional account verification for this turn.
      ModelVerification(ModelVerificationEvent),
  
-@@ -2108,6 +2111,20 @@ pub struct ModelRerouteEvent {
+@@ -2108,6 +2111,23 @@ pub struct ModelRerouteEvent {
      pub reason: ModelRerouteReason,
  }
  
 +/// Metadata for one sampling request. A missing server model is unverified.
 +///
 +/// `server_model` only comes from the transport's effective-model disclosure,
-+/// never from response text, the requested model, or the response body's label.
++/// never from response text or the requested model. `response_label` is the
++/// `model` field of the response body: a server-written label that is kept
++/// separate because it can differ from the effective-model header.
 +#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 +pub struct ModelRoutingEvent {
 +    pub request_id: String,
 +    pub requested_model: String,
 +    pub server_model: Option<String>,
++    pub response_label: Option<String>,
 +    pub model_provider: String,
 +    pub reasoning_effort: Option<String>,
 +    pub service_tier: Option<String>,

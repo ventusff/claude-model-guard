@@ -1,6 +1,6 @@
 ---
 name: remove
-description: Cleanly uninstall the model-guard statusline — unregisters statusLine from ~/.claude/settings.json (restoring any previously saved statusline), and optionally deletes the installed script and config.
+description: Cleanly uninstall the model-guard statusline — unregisters statusLine from ~/.claude/settings.json (restoring any previously saved statusline), and optionally deletes the installed scripts and config.
 argument-hint: "(no arguments)"
 ---
 
@@ -18,7 +18,7 @@ You are removing the model-guard statusline for this user. Keep the final report
 ## 2. Ask (ONE AskUserQuestion call)
 
 Header "Cleanup": "Unregister + delete files (Recommended)" / "Unregister only
-(keep script & config)".
+(keep scripts & config)".
 
 ## 3. Execute
 
@@ -35,7 +35,8 @@ a) Unregister — restore the pre-model-guard statusline if one was saved:
 - Otherwise: `jq 'del(.statusLine)' ...` (same tmp+mv pattern).
 - Validate the result parses: `jq . ~/.claude/settings.json >/dev/null`.
 
-b) If deleting files: `rm -f ~/.claude/model-guard.sh ~/.claude/model-guard.conf`
+b) If deleting files: `rm -rf ~/.claude/model-guard; rm -f ~/.claude/model-guard.sh ~/.claude/model-guard.conf`
+   (the flat `model-guard.sh` exists only on installs made before the directory layout)
    and the per-session recovery state: `rm -rf "${XDG_RUNTIME_DIR:-/tmp}/model-guard"`.
    If `~/.config/kitty/kitty.conf` carries the two remote-control lines that
    `setup` added (`allow_remote_control socket-only`, `listen_on unix:@kitty`),

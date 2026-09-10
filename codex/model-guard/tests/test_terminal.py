@@ -15,7 +15,7 @@ import termios
 import time
 import unittest
 
-from test_integration import ResponsesFixture
+from test_integration import OFFLINE, ResponsesFixture
 
 
 class Terminal:
@@ -89,7 +89,7 @@ def fixture_home(base, api):
         'requires_openai_auth = false\nsupports_websockets = false\n'
     )
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CODEX_", "OPENAI_", "MODEL_GUARD_", "TMUX", "KITTY_"))}
-    env.update(CODEX_HOME=str(home), MODEL_GUARD_CODEX_HOME=str(base / "guard"), TERM="xterm-256color", COLORTERM="truecolor")
+    env.update(CODEX_HOME=str(home), MODEL_GUARD_CODEX_HOME=str(base / "guard"), TERM="xterm-256color", COLORTERM="truecolor", **OFFLINE)
     return env
 
 
@@ -100,7 +100,7 @@ class NativeTerminalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="mg-native-pty-") as temp, ResponsesFixture(None, [516]) as api:
             base = Path(temp)
             env = fixture_home(base, api)
-            seed = subprocess.run([binary, "exec", "--skip-git-repo-check", "--json", "--sandbox", "read-only", "Reply OK."], env=env, cwd=base, capture_output=True, text=True, timeout=40, check=True)
+            seed = subprocess.run([binary, "exec", "--skip-git-repo-check", "--json", "--sandbox", "read-only", "Reply OK."], env=env, cwd=base, capture_output=True, text=True, timeout=90, check=True)
             thread = next(json.loads(line)["thread_id"] for line in seed.stdout.splitlines() if json.loads(line).get("type") == "thread.started")
             commands = [[binary, "--sandbox", "read-only", "--ask-for-approval", "never", *mode, "Reply OK."] for mode in ([], ["resume", thread], ["fork", thread])]
             if shutil.which("fish"):
@@ -150,6 +150,23 @@ class NativeTerminalTests(unittest.TestCase):
             terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Reply OK."], fixture_home(base, api), base)
             try:
                 terminal.wait(lambda: "ROUTE DIFF gpt-6-astra" in terminal.text())
+            finally:
+                terminal.close()
+
+    def test_body_label_difference_is_visible_and_explained_in_status(self):
+        binary = os.environ["MODEL_GUARD_NATIVE_BIN"]
+        with tempfile.TemporaryDirectory(prefix="mg-native-label-") as temp, ResponsesFixture(None, label="gpt-4o") as api:
+            base = Path(temp)
+            terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Reply OK."], fixture_home(base, api), base)
+            try:
+                terminal.wait(lambda: "Response labeled gpt-4o" in terminal.text() and "requested gpt-6-astra" in terminal.text())
+                self.assertNotIn("ROUTE DIFF", terminal.text())
+                terminal.send(b"/status")
+                terminal.wait(lambda: "/status" in terminal.text())
+                for _ in range(5):
+                    terminal.poll()
+                terminal.send(b"\r")
+                terminal.wait(lambda: "Response body label: gpt-4o" in terminal.text())
             finally:
                 terminal.close()
 

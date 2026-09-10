@@ -54,10 +54,10 @@ index a1079ac..2c1fe44 100644
              external_editor_state: ExternalEditorState::Closed,
 diff --git a/codex-rs/tui/src/chatwidget/model_guard.rs b/codex-rs/tui/src/chatwidget/model_guard.rs
 new file mode 100644
-index 0000000..92a6709
+index 0000000..7c47e89
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard.rs
-@@ -0,0 +1,294 @@
+@@ -0,0 +1,328 @@
 +//! Native routing and reasoning metadata for this widget's thread only.
 +//!
 +//! This surface participates in Codex's normal layout. It neither controls the
@@ -101,6 +101,7 @@ index 0000000..92a6709
 +    suspended: bool,
 +    route: Option<ModelRoutingUpdatedNotification>,
 +    mismatch: Option<(String, String)>,
++    label_mismatch: Option<(String, String)>,
 +    scope: Option<Scope>,
 +    turn_scope: Option<Scope>,
 +    samples: VecDeque<i64>,
@@ -151,6 +152,7 @@ index 0000000..92a6709
 +        self.suspended = false;
 +        self.route = None;
 +        self.mismatch = None;
++        self.label_mismatch = None;
 +        self.turn_hits = 0;
 +        if self.turn_scope.as_ref() != Some(&scope) {
 +            self.scope = None;
@@ -176,6 +178,7 @@ index 0000000..92a6709
 +        self.turn_hits = 0;
 +        self.route = None;
 +        self.mismatch = None;
++        self.label_mismatch = None;
 +        // Responses already in flight can still be billed to the prior login.
 +        self.suspended = self.running;
 +    }
@@ -316,6 +319,11 @@ index 0000000..92a6709
 +                {
 +                    guard.mismatch = Some((n.requested_model.clone(), actual.clone()));
 +                }
++                if let Some(label) = n.response_label.as_deref()
++                    && !label_consistent(&n.requested_model, label)
++                {
++                    guard.label_mismatch = Some((n.requested_model.clone(), label.to_owned()));
++                }
 +                guard.route = Some(n.clone());
 +            }
 +            ServerNotification::ModelRerouted(n)
@@ -346,6 +354,32 @@ index 0000000..92a6709
 +    }
 +}
 +
++/// Whether a response body's model label describes the requested model.
++///
++/// Equal identifiers agree, and so does one identifier extending the other
++/// at a separator (`gpt-6-astra` and `gpt-6-astra-2026-09-01`, or the bare
++/// family `gpt-6`). A size tier appended to the requested model names a
++/// different model. Everything else, including another family, differs.
++pub(super) fn label_consistent(requested: &str, label: &str) -> bool {
++    const SIZE_TIERS: [&str; 7] = ["mini", "nano", "lite", "small", "fast", "flash", "turbo"];
++    let requested = requested.to_ascii_lowercase();
++    let label = label.to_ascii_lowercase();
++    if requested == label {
++        return true;
++    }
++    let extension = |short: &str, long: &str| {
++        long.strip_prefix(short)
++            .filter(|rest| rest.starts_with(['-', '.', ':', '_', '@']))
++            .map(|rest| rest[1..].to_owned())
++    };
++    match extension(&requested, &label) {
++        Some(rest) => !rest
++            .split(['-', '.', ':', '_', '@'])
++            .any(|part| SIZE_TIERS.contains(&part)),
++        None => extension(&label, &requested).is_some(),
++    }
++}
++
 +#[path = "model_guard_display.rs"]
 +mod display;
 +
@@ -354,10 +388,10 @@ index 0000000..92a6709
 +mod tests;
 diff --git a/codex-rs/tui/src/chatwidget/model_guard_display.rs b/codex-rs/tui/src/chatwidget/model_guard_display.rs
 new file mode 100644
-index 0000000..744451c
+index 0000000..84ae113
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard_display.rs
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,248 @@
 +//! Native footer content and on-demand evidence details.
 +use super::*;
 +use ratatui::style::Color;
@@ -435,6 +469,14 @@ index 0000000..744451c
 +                "{previous}{} {from} → {to}",
 +                if zh { "路由变化" } else { "ROUTE DIFF" }
 +            ))
++        } else if let Some((from, to)) = guard.label_mismatch.as_ref() {
++            Some(if zh {
++                format!("{previous}响应标注 {to} · 请求 {from}（正文标签，非响应头）")
++            } else {
++                format!(
++                    "{previous}Response labeled {to} · requested {from} (body label, not a header)"
++                )
++            })
 +        } else if guard.alert() == "suspect" {
 +            let hits = guard
 +                .samples
@@ -458,6 +500,10 @@ index 0000000..744451c
 +                Style::default()
 +                    .fg(Color::Rgb(255, 241, 242))
 +                    .bg(Color::Rgb(127, 29, 29))
++            } else if guard.label_mismatch.is_some() {
++                Style::default()
++                    .fg(Color::Rgb(255, 237, 213))
++                    .bg(Color::Rgb(124, 45, 18))
 +            } else {
 +                Style::default()
 +                    .fg(Color::Rgb(254, 243, 199))
@@ -507,6 +553,15 @@ index 0000000..744451c
 +                    .into(),
 +                );
 +            }
++            details.push(
++                match route.response_label.as_deref() {
++                    Some(label) if zh => format!("响应正文标签: {}", safe_label(label)),
++                    Some(label) => format!("Response body label: {}", safe_label(label)),
++                    None if zh => "响应正文没有模型标签。".to_owned(),
++                    None => "The response body carried no model label.".to_owned(),
++                }
++                .into(),
++            );
 +        } else {
 +            details.push(
 +                if zh {
@@ -525,6 +580,21 @@ index 0000000..744451c
 +                        "本轮曾披露"
 +                    } else {
 +                        "Disclosed earlier this turn"
++                    },
++                    safe_label(from),
++                    safe_label(to)
++                )
++                .into(),
++            );
++        }
++        if let Some((from, to)) = guard.label_mismatch.as_ref() {
++            details.push(
++                format!(
++                    "{}: {} → {}",
++                    if zh {
++                        "本轮正文标签曾不同于请求"
++                    } else {
++                        "Body label differed from the request this turn"
 +                    },
 +                    safe_label(from),
 +                    safe_label(to)

@@ -1,9 +1,9 @@
 diff --git a/codex-rs/tui/src/chatwidget/model_guard_tests.rs b/codex-rs/tui/src/chatwidget/model_guard_tests.rs
 new file mode 100644
-index 0000000..aecb7cd
+index 0000000..fb52284
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard_tests.rs
-@@ -0,0 +1,374 @@
+@@ -0,0 +1,429 @@
 +use super::*;
 +use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 +use codex_app_server_protocol::RawResponseCompletedNotification;
@@ -43,6 +43,7 @@ index 0000000..aecb7cd
 +        request_id: "request-1".into(),
 +        requested_model: "gpt-6-astra".into(),
 +        server_model: actual.map(str::to_owned),
++        response_label: None,
 +        model_provider: "openai".into(),
 +        reasoning_effort: Some("max".into()),
 +        service_tier: None,
@@ -129,6 +130,56 @@ index 0000000..aecb7cd
 +     request gpt-6-astra · max · server reported gpt-6-astra
 +     Reasoning anomaly signal: 3 of the last 5 responses used 516 tokens
 +    ");
++}
++
++#[test]
++fn native_guard_label_consistency_rule() {
++    for (requested, label, expected) in [
++        ("gpt-6-astra", "gpt-6-astra", true),
++        ("GPT-6-Astra", "gpt-6-astra", true),
++        ("gpt-6-astra", "gpt-6-astra-2026-09-01", true),
++        ("gpt-6-astra", "gpt-6", true),
++        ("gpt-5.6-sol", "gpt-5.6-sol-codex", true),
++        ("gpt-6-astra", "gpt-4o", false),
++        ("gpt-6-astra", "gpt-6-astra-mini", false),
++        ("gpt-6-astra", "gpt-6-astrax", false),
++        ("gpt-6-astra", "gpt-5.6-sol", false),
++    ] {
++        assert_eq!(
++            label_consistent(requested, label),
++            expected,
++            "{requested} vs {label}"
++        );
++    }
++}
++
++#[tokio::test]
++async fn native_guard_body_label_difference_is_reported_below_a_header_difference() {
++    let mut chat = widget().await;
++    let mut labeled = route(&chat, /*actual*/ None);
++    if let ServerNotification::ModelRoutingUpdated(n) = &mut labeled {
++        n.response_label = Some("gpt-6-astra-2026-09-01".into());
++    }
++    chat.observe_model_guard(&labeled, /*replay_kind*/ None);
++    assert_eq!(chat.model_guard_lines().unwrap().len(), 1);
++    if let ServerNotification::ModelRoutingUpdated(n) = &mut labeled {
++        n.response_label = Some("gpt-4o".into());
++    }
++    chat.observe_model_guard(&labeled, /*replay_kind*/ None);
++    let guard = chat.model_guard.as_ref().unwrap();
++    assert_eq!(guard.mismatch, None);
++    assert_eq!(
++        guard.label_mismatch,
++        Some(("gpt-6-astra".into(), "gpt-4o".into()))
++    );
++    insta::assert_snapshot!(lines(&chat), @r"
++     request gpt-6-astra · max
++     Response labeled gpt-4o · requested gpt-6-astra (body label, not a header)
++    ");
++    chat.observe_model_guard(&route(&chat, Some("gpt-4o")), /*replay_kind*/ None);
++    let text = lines(&chat);
++    assert!(text.contains("ROUTE DIFF gpt-6-astra → gpt-4o"));
++    assert!(!text.contains("Response labeled"));
 +}
 +
 +#[tokio::test]
@@ -348,7 +399,11 @@ index 0000000..aecb7cd
 +        let text = buf
 +            .content
 +            .chunks(usize::from(width))
-+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
++            .map(|row| {
++                row.iter()
++                    .map(ratatui::buffer::Cell::symbol)
++                    .collect::<String>()
++            })
 +            .collect::<Vec<_>>()
 +            .join("\n");
 +        if case == 0 {

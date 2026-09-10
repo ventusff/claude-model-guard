@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.7.0 — 2026-09-10
+
+- **The response body's model label is a second routing signal for Codex.** The
+  server writes a `model` into every response; the official client stopped
+  comparing it in February because slug variants caused false positives, and on
+  a ChatGPT login the effective-model header is usually absent, so until now the
+  guard could never say anything about the everyday route. The native build now
+  carries that label on `model/routing/updated`. A label of the request's own
+  family stays quiet (`gpt-6-astra-2026-09-01`, bare `gpt-6`); another family or
+  a size tier (`gpt-4o`, `gpt-6-astra-mini`) shows an orange line under the
+  footer, ranked below the red effective-model difference. `/status` always
+  shows the label. `probe` exits `5` for a differing label without disclosure.
+- **Installation names the sessions it cannot change.** A running Codex process
+  keeps the executable it started with. The installer and `doctor` list the
+  sessions still on another executable, with their directories, and say to
+  finish each one and `codex resume` there. Versioned packages and environments
+  that no session uses any more are removed.
+- **Claude statusline scripts share one library.** The statusline sources
+  `lib.sh` next to it; model ranking, saved-effort lookup, language detection and
+  all eight languages of text (`text.sh`) exist once. `setup` installs the three
+  files under `~/.claude/model-guard/`; the session-start hook refreshes that
+  directory and turns a registered `~/.claude/model-guard.sh` into a hand-off,
+  so no settings change is needed on update.
+- The Python probe package keeps only what the probe needs: account and
+  rate-limit polling left with the terminal band they served. `model-guard-codex`
+  has proper subcommand help; `doctor` reports a missing installation plainly.
+
 ## 1.6.0 — 2026-09-09
 
 - **Native Codex status line.** Replace the terminal multiplexer and live protocol
