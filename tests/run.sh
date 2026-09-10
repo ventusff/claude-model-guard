@@ -336,11 +336,16 @@ rm -f "$inst/text.sh"
 out=$(start)
 check "a missing file makes the set incomplete: refreshed again" 'grep -q "refreshed to $MG_VERSION" <<<"$out" && [ -f "$inst/text.sh" ] && [ -z "$(ls "$inst"/*.mg-new 2>/dev/null)" ]'
 legacy="$tmp/.claude/model-guard.sh"
-cp "$root/scripts/statusline.sh" "$legacy"; chmod +x "$legacy"
-jq --arg c "$legacy" '.statusLine.command=$c' "$MODEL_GUARD_SETTINGS" > "$tmp/x" && mv "$tmp/x" "$MODEL_GUARD_SETTINGS"
+printf '#!/usr/bin/env bash\nMG_VERSION="1.6.0"\necho old-copy\n' > "$legacy"; chmod +x "$legacy"
+wrapper="$tmp/.claude/model-guard-wrapper.sh"
+printf '#!/usr/bin/env bash\nexec "%s"\n' "$legacy" > "$wrapper"; chmod +x "$wrapper"
+jq --arg c "$wrapper" '.statusLine.command=$c' "$MODEL_GUARD_SETTINGS" > "$tmp/x" && mv "$tmp/x" "$MODEL_GUARD_SETTINGS"
 start >/dev/null
-check "a registered flat path becomes a hand-off to the installed statusline" 'grep -qF "exec $inst/statusline.sh" "$legacy"'
-check "the hand-off renders the band" 'printf "{\"model\":{\"id\":\"claude-haiku-4-5\",\"display_name\":\"Haiku 4.5\"}}" | HOME="$tmp" "$legacy" | grep -q "DOWNGRADED"'
+check "an earlier flat copy becomes a hand-off even behind a user's wrapper" 'grep -qF "exec $inst/statusline.sh" "$legacy"'
+check "the hand-off renders the band" 'printf "{\"model\":{\"id\":\"claude-haiku-4-5\",\"display_name\":\"Haiku 4.5\"}}" | HOME="$tmp" "$wrapper" | grep -q "DOWNGRADED"'
+printf '#!/usr/bin/env bash\necho mine\n' > "$legacy"
+start >/dev/null
+check "a user script at the flat path is left alone" 'grep -q "echo mine" "$legacy"'
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

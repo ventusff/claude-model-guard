@@ -39,7 +39,7 @@ unaltered official standalone release. Build in a new directory:
 
 ```sh
 python3 build.py \
-  --work-dir "$HOME/.cache/model-guard-build-1.7.0" \
+  --work-dir "$HOME/.cache/model-guard-build-1.7.1" \
   --official-package "$HOME/.codex/packages/standalone/current"
 ```
 

@@ -62,6 +62,22 @@ class SessionTests(unittest.TestCase):
                 self.assertEqual(prune(root, set()), [])
             self.assertTrue(data.exists())
 
+    def test_only_interactive_invocations_count_as_sessions(self):
+        for argv, expected in [
+            ([], True),
+            (["--dangerously-bypass-approvals-and-sandbox"], True),
+            (["resume", "--last"], True),
+            (["-m", "gpt-6-astra", "fork", "abc"], True),
+            (["--sandbox", "read-only", "Reply OK."], True),
+            (["-c", "model='exec'", "resume"], True),
+            (["exec", "--json", "Reply OK."], False),
+            (["app-server", "--stdio"], False),
+            (["--sandbox-policy-cwd", "/w", "--apply-seccomp-then-exec", "--", "/bin/bash"], False),
+            (["login"], False),
+        ]:
+            with self.subTest(argv=argv):
+                self.assertEqual(sessions._interactive(argv), expected)
+
     def test_described_directories_carry_no_control_characters(self):
         listed = [sessions.Session(3, "/x/codex", "/tmp/evil\x1b[2Jdir\n", "resume")]
         text = sessions.describe(listed)

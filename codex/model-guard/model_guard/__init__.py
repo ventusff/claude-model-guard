@@ -1,3 +1,3 @@
 """Observe the official Codex client without inferring hidden model identity."""
 
-__version__ = "1.7.0"
+__version__ = "1.7.1"

@@ -59,18 +59,56 @@ def executables():
     return [Path(exe.removesuffix(" (deleted)")) for _, exe in _processes()]
 
 
+# Subcommands that never open the interactive TUI, and the flag of the sandbox
+# helper the TUI re-executes itself as for each command it runs.
+NOT_A_SESSION = {"exec", "app-server", "mcp-server", "mcp", "login", "logout", "completion",
+                 "sandbox", "debug", "apply", "cloud", "features", "review", "--apply-seccomp-then-exec"}
+# Top-level options that take the next token as their value.
+VALUE_OPTIONS = {"-m", "--model", "-p", "--profile", "-c", "--config", "-C", "--cd", "-s", "--sandbox",
+                 "-a", "--ask-for-approval", "-i", "--image", "--add-dir", "--remote", "--enable", "--disable",
+                 "--local-provider", "--oss-provider"}
+
+
+def _interactive(argv):
+    """Whether argv opens a TUI session: no subcommand, `resume` or `fork`.
+
+    The first bare token decides; a prompt given on the command line is such a
+    token too, and it is not a subcommand, so it counts as a session.
+    """
+    if "--apply-seccomp-then-exec" in argv:
+        return False
+    skip = False
+    for arg in argv:
+        if skip:
+            skip = False
+            continue
+        if arg in NOT_A_SESSION:
+            return False
+        if arg in VALUE_OPTIONS:
+            skip = True
+        elif not arg.startswith("-"):
+            return True
+    return True
+
+
 def running():
-    """This user's processes whose executable is named `codex`, oldest first."""
+    """This user's interactive Codex sessions, oldest first.
+
+    Helpers Codex spawns from a session and non-interactive runs share the
+    executable name but are not sessions anyone resumes, so they are left out.
+    """
     sessions = []
     for pid, executable in _processes():
         if Path(executable.removesuffix(" (deleted)")).name != "codex":
             continue
         try:
-            argv = (PROC / str(pid) / "cmdline").read_bytes().split(b"\0")[1:]
+            argv = [arg.decode(errors="replace") for arg in (PROC / str(pid) / "cmdline").read_bytes().split(b"\0")[1:] if arg]
             cwd = os.readlink(PROC / str(pid) / "cwd")
         except OSError:
             continue
-        command = " ".join(_text(arg.decode(errors="replace")) for arg in argv if arg).strip()
+        if not _interactive(argv):
+            continue
+        command = _text(" ".join(argv), 100)
         sessions.append(Session(pid, executable, cwd, command or "codex"))
     return sorted(sessions, key=lambda session: session.pid)
 

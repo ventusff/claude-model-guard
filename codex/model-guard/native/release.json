@@ -1,5 +1,5 @@
 {
-  "plugin_version": "1.7.0",
+  "plugin_version": "1.7.1",
   "codex_version": "0.153.4",
   "upstream_repository": "https://github.com/openai/codex.git",
   "upstream_ref": "rust-v0.153.4",
@@ -25,7 +25,7 @@
     },
     {
       "file": "0005-release-packaging.patch",
-      "sha256": "5de313d4b23362aed3ec6ab1bfc9227fb36f0adeab377ca78fa8ef1fb84b1c73"
+      "sha256": "86d6b898d296ec5a6f0597d7ca2ce36825b7f96042b0c6697aabf1bd462705ca"
     }
   ],
   "helper_sha256": {
@@ -34,7 +34,7 @@
     "codex-resources/zsh/bin/zsh": "67faaaa89242c4a332e16e508a1977cffc24bf7fca31d4411cdfd101f3831ef3",
     "codex-path/rg": "e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849"
   },
-  "sha256": "c8d0253f8c5d402fa6112406710d196bf2515e2435f73cb525eb4e137c29ef53",
-  "url": "https://github.com/ventusff/claude-model-guard/releases/download/v1.7.0/model-guard-codex-linux-x86_64.tar.gz",
-  "binary_sha256": "e1c1acc6b0a1b5a53d0a0412a9eab3163b6ca399053698ff583245560e70f161"
+  "sha256": "c5adde2264c53c80f436a00c8fd19fd5d994b93922d4b3f3647425e5184e7525",
+  "url": "https://github.com/ventusff/claude-model-guard/releases/download/v1.7.1/model-guard-codex-linux-x86_64.tar.gz",
+  "binary_sha256": "a7faddc3ed199eb0f71ef97130f52fd4eb60c0c96f7035edac14baca90ac5b65"
 }

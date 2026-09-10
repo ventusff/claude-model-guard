@@ -7,8 +7,9 @@
 # this refreshes that copy in place and says so, so an update needs no second
 # command. Silent otherwise.
 #
-# Installs made before the directory layout registered ~/.claude/model-guard.sh;
-# that path keeps working as a one-line hand-off to the installed directory.
+# Installs made before the directory layout copied the script to
+# ~/.claude/model-guard.sh; that path keeps working as a one-line hand-off to
+# the installed directory, for settings.json and for wrappers that exec it.
 # Silence forever:  echo 'SETUP_HINT=off' >> ~/.claude/model-guard.conf
 set -u
 command -v jq >/dev/null 2>&1 || exit 0
@@ -71,14 +72,13 @@ else
       msg="model-guard: plugin updated (installed ${v_inst:-?} → ${MG_VERSION}) but the statusline scripts could not be refreshed — run /model-guard:setup."
     fi
   fi
-  # A registered flat path becomes a hand-off to the directory, so settings.json
-  # never needs to change on a plugin update. Only a complete install is handed to.
-  case "$cmd" in
-    "$legacy"|'~/.claude/model-guard.sh'|'$HOME/.claude/model-guard.sh')
-      if [ "$(installed_version)" = "$MG_VERSION" ] && ! grep -qsF "$(mg_handoff_line)" "$legacy"; then
-        mg_write_handoff
-      fi;;
-  esac
+  # A flat copy left by an earlier install becomes a hand-off to the directory,
+  # whether settings.json names it directly or a wrapper of the user's execs it,
+  # so nothing needs to change on a plugin update. Only a complete install is
+  # handed to, and only a model-guard copy is rewritten, never a user's script.
+  if grep -qs '^MG_VERSION=' "$legacy" && [ "$(installed_version)" = "$MG_VERSION" ]; then
+    mg_write_handoff
+  fi
 fi
 
 [ -n "$msg" ] && printf '{"systemMessage": %s}\n' "$(printf '%s' "$msg" | jq -Rs .)"

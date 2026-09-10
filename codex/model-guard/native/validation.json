@@ -32,12 +32,12 @@
     "The official source tag has release-version snapshot mismatches. Those snapshots were not rewritten to claim a green suite."
   ],
   "package_python": {
-    "passed": 72,
+    "passed": 73,
     "skipped": 0,
     "tests": "State, check, reasoning, sessions/prune, installer and launcher units; official app-server SSE/WebSocket fixtures including body-label mismatch and header precedence; real PTY new/resume/fork/Fish cx resume/paste/resize, route-difference and body-label warnings with /status; stock terminal-mode and scrollback parity. Fixtures keep Codex's curated-plugin sync off the network."
   },
   "claude": {
-    "passed": 99,
+    "passed": 100,
     "failed": 0
   },
   "source_package": {

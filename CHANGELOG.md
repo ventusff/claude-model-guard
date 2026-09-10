@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.1 — 2026-09-10
+
+- The session list after a Codex install names interactive sessions only.
+  Sandbox helpers the TUI re-executes itself as, `exec` runs and app-servers
+  share the executable name but are nothing to resume, so they are left out,
+  and a listed command line is cut at 100 characters.
+- An earlier flat `~/.claude/model-guard.sh` is handed over to the installed
+  directory even when a wrapper of the user's execs it rather than
+  `settings.json` naming it; a script that is not a model-guard copy is never
+  rewritten.
+
 ## 1.7.0 — 2026-09-10
 
 - **The response body's model label is a second routing signal for Codex.** The
