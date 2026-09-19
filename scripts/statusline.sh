@@ -2,7 +2,8 @@
 # model-guard — a Claude Code statusline that catches silent model downgrades.
 # https://github.com/ventusff/claude-model-guard
 #
-# One full-width, theme-proof color band: model + reasoning effort + context + account.
+# One full-width, theme-proof color band: model + reasoning effort + context + usage +
+# working directory + account.
 #   green ✔   actual model matches what this machine expects
 #   blue  ⬆   actual model is ABOVE your default (gentle FYI, no alarm)
 #   red   🚨  actual model is BELOW your default (silent downgrade) — full-width alarm
@@ -34,7 +35,7 @@
 #
 # Debug: add   printf '%s' "$input" > ~/.claude/model-guard-last-input.json
 # right after the `input=$(cat ...)` line to inspect the full stdin payload
-# (model / effort / thinking / context_window / rate_limits / fast_mode / ...).
+# (model / effort / thinking / context_window / rate_limits / workspace / fast_mode / ...).
 
 set -u
 # shellcheck source=lib.sh
@@ -76,6 +77,8 @@ thinking_off=$(printf '%s' "$input" | jq -r 'if .thinking.enabled == false then 
 ctx_pct=$(printf '%s' "$input" | jq -r '.context_window.used_percentage // empty | if type=="number" then floor else empty end' 2>/dev/null || true)
 seen_5h=$(printf '%s' "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty | if type=="number" then floor else empty end' 2>/dev/null || true)
 seen_7d=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty | if type=="number" then floor else empty end' 2>/dev/null || true)
+# The session's working directory, on one line whatever the path contains.
+cwd=$(printf '%s' "$input" | jq -r '.workspace.current_dir // .cwd // empty | gsub("[[:cntrl:]]"; "?")' 2>/dev/null || true)
 email=$(jq -r '.oauthAccount.emailAddress // empty' "$CLAUDE_JSON" 2>/dev/null || true)
 expected_effort=$(mg_settings_effort "$model_id")
 state=""
@@ -261,6 +264,14 @@ if [ -n "$warn_at" ] && [ -n "$limit_5h" ] && [ "$limit_5h" -ge "$warn_at" ] 2>/
 elif mg_conf_on SHOW_LIMIT && [ -n "$limit_5h" ]; then
   seg+=" ┃ ⏳ 5h ${limit_5h}%"
   [ -n "$limit_7d" ] && seg+=" · 7d ${limit_7d}%"
+fi
+
+if mg_conf_on SHOW_CWD && [ -n "$cwd" ]; then
+  case "$cwd" in
+    "$HOME")   cwd="~";;
+    "$HOME"/*) cwd="~${cwd#"$HOME"}";;
+  esac
+  seg+=" ┃ 📁 ${cwd}"
 fi
 
 acct_seg=""

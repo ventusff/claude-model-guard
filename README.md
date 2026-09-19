@@ -43,7 +43,7 @@ And model identity is only half the story. Red **inline patches** catch the othe
 - 🧠 **Extended thinking** switched off
 - ⏳ **5-hour rate-limit window ≥ 80 %** — the precondition for a forced fallback, flagged *before* it happens
 
-Plus the useful everyday bits: current model & effort, context-window usage, your account's 5-hour and 7-day usage (`⏳ 5h 37% · 7d 18%`), and which account you're logged in with (multi-account users know the pain).
+Plus the useful everyday bits: current model & effort, context-window usage, your account's 5-hour and 7-day usage (`⏳ 5h 37% · 7d 18%`), the session's working directory (`📁 ~/code/my-repo`), and which account you're logged in with (multi-account users know the pain).
 
 The effort baseline is reread on every update. Saving `high` in `/model` or `/effort` takes effect even if the old global field still says `xhigh`; a later drop to `medium` still alarms. Canonical Claude model IDs share their saved effort with their `[1m]` context variants.
 
@@ -154,6 +154,7 @@ Everything lives in `~/.claude/model-guard.conf` (created by `setup`, safe to ed
 | `SHOW_ACCOUNT` | `true` | Show the logged-in account email (reads `~/.claude.json` live — switching accounts updates the band) |
 | `SHOW_CONTEXT` | `true` | Show context-window usage, e.g. `◔ 13%` |
 | `SHOW_LIMIT` | `true` | Show the logged-in account's 5-hour and 7-day usage, e.g. `⏳ 5h 37% · 7d 18%` (see above) |
+| `SHOW_CWD` | `true` | Show the session's working directory, home shortened to `~`, e.g. `📁 ~/code/my-repo` |
 | `LIMIT_WARN_AT` | `80` | Red patch when the 5-hour rate-limit usage reaches N %. `off` disables |
 | `EXPECTED_MODEL` | *(auto)* | Manual expected-model pattern, e.g. `opus\|fable` |
 | `RECOVER` | `on` | Master switch for the recovery hooks (`off` disables stop + switch entirely) |

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.0 — 2026-09-19
+
+- **The band shows the session's working directory.** `📁 ~/code/my-repo` sits
+  between the usage reading and the account, taken from the statusline
+  payload's `workspace.current_dir`, so it follows the session when it changes
+  directory. Home is shortened to `~`. `SHOW_CWD=false` hides it.
+- The Codex integration is unchanged and stays at 1.7.1, the version its native
+  build carries.
+
 ## 1.7.1 — 2026-09-10
 
 - The session list after a Codex install names interactive sessions only.

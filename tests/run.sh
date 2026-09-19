@@ -313,6 +313,20 @@ rm -f "$MODEL_GUARD_CREDENTIALS"; n=$(calls)
 out=$(band)
 check "no login token: the payload's own reading, nothing asked" '[ "$(calls)" = "$n" ] && grep -q "5h limit 99%!" <<<"$out"'
 
+echo "== working directory"
+cwd_band(){ jq -nc --arg d "$1" '{session_id:"nostate",model:{id:"claude-fable-5-1[1m]",display_name:"Fable 5.1"}} + (if $d == "" then {} else {cwd:"/elsewhere",workspace:{current_dir:$d}} end)' | HOME="$tmp" "$sl"; }
+printf 'LANGUAGE=en\nSHOW_ACCOUNT=false\n' > "$MODEL_GUARD_CONF"
+check "a directory under home is shown from ~" 'cwd_band "$tmp/work/repo" | grep -qF "📁 ~/work/repo "'
+check "home itself is ~" 'cwd_band "$tmp" | grep -qF "📁 ~ "'
+check "a sibling of home that shares its prefix stays absolute" 'cwd_band "${tmp}x/repo" | grep -qF "📁 ${tmp}x/repo "'
+check "a directory outside home stays absolute" 'cwd_band /srv/data | grep -qF "📁 /srv/data "'
+check "a line break in the path stays on the band's one line" '[ "$(cwd_band "/srv/a
+b" | wc -l)" = 0 ] && cwd_band "/srv/a
+b" | grep -qF "📁 /srv/a?b "'
+check "no directory in the payload: no segment" '! cwd_band "" | grep -q "📁"'
+printf 'LANGUAGE=en\nSHOW_ACCOUNT=false\nSHOW_CWD=false\n' > "$MODEL_GUARD_CONF"
+check "SHOW_CWD=false hides it" '! cwd_band /srv/data | grep -q "📁"'
+
 echo "== session-start install check"
 ci="$root/scripts/check-install.sh"
 inst="$MODEL_GUARD_INSTALL_DIR"

@@ -10,6 +10,7 @@
 #   SHOW_ACCOUNT=true|false     logged-in account email on the band (default true)
 #   SHOW_CONTEXT=true|false     context-window usage (default true)
 #   SHOW_LIMIT=true|false       the account's 5-hour and 7-day usage (default true)
+#   SHOW_CWD=true|false         the session's working directory, home as ~ (default true)
 #   LIMIT_WARN_AT=<0-100|off>   red patch when 5-hour usage reaches N (default 80)
 # Recovery keys:
 #   RECOVER=on|off              master switch for the hooks (default on)
@@ -38,7 +39,7 @@
 # The installed copy under ~/.claude/model-guard/ is what Claude Code runs for
 # the statusline; check-install.sh refreshes it when MG_VERSION moves.
 
-MG_VERSION="1.7.1"
+MG_VERSION="1.8.0"
 MG_CONF="${MODEL_GUARD_CONF:-$HOME/.claude/model-guard.conf}"
 MG_SETTINGS="${MODEL_GUARD_SETTINGS:-$HOME/.claude/settings.json}"
 MG_STATE_DIR="${MODEL_GUARD_STATE_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/model-guard}"
