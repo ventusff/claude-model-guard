@@ -346,6 +346,9 @@ check "a current install is left alone, silently" '[ -z "$(start)" ]'
 sed -i "s/^MG_VERSION=.*/MG_VERSION=\"0.0.1\"/" "$inst/lib.sh"
 out=$(start)
 check "an older installed copy is refreshed in place" 'grep -q "was 0.0.1" <<<"$out" && grep -q "MG_VERSION=\"$MG_VERSION\"" "$inst/lib.sh"'
+sed -i "s/^MG_VERSION=.*/MG_VERSION=\"99.0.0\"/" "$inst/lib.sh"
+check "a newer installed copy is left alone by an older plugin" '[ -z "$(start)" ] && grep -q "MG_VERSION=\"99.0.0\"" "$inst/lib.sh"'
+sed -i "s/^MG_VERSION=.*/MG_VERSION=\"$MG_VERSION\"/" "$inst/lib.sh"
 rm -f "$inst/text.sh"
 out=$(start)
 check "a missing file makes the set incomplete: refreshed again" 'grep -q "refreshed to $MG_VERSION" <<<"$out" && [ -f "$inst/text.sh" ] && [ -z "$(ls "$inst"/*.mg-new 2>/dev/null)" ]'

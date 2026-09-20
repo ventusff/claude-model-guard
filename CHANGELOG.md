@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.1 — 2026-09-20
+
+- The session-start hook no longer rolls a newer installed statusline back. A
+  session that started on an earlier plugin fires the hook again on resume and
+  compaction with that earlier version, and used to "refresh" the copy a plugin
+  update had just installed to the older scripts; the copy is now replaced only
+  when it is incomplete or older than the plugin running the hook.
+
 ## 1.8.0 — 2026-09-19
 
 - **The band shows the session's working directory.** `📁 ~/code/my-repo` sits

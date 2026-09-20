@@ -5,7 +5,7 @@
 # Once it is registered, the statusLine runs an installed copy of the plugin's
 # scripts (~/.claude/model-guard/): when a plugin update ships a newer one,
 # this refreshes that copy in place and says so, so an update needs no second
-# command. Silent otherwise.
+# command. A copy newer than this plugin is left as it is. Silent otherwise.
 #
 # Installs made before the directory layout copied the script to
 # ~/.claude/model-guard.sh; that path keeps working as a one-line hand-off to
@@ -27,6 +27,15 @@ installed_version() {
   local f
   for f in statusline.sh lib.sh text.sh; do [ -f "$MG_INSTALL_DIR/$f" ] || return 0; done
   sed -n 's/^MG_VERSION="\(.*\)"$/\1/p' "$MG_INSTALL_DIR/lib.sh" 2>/dev/null | head -n1
+}
+
+# True when the installed set is incomplete or older than this plugin. A newer
+# copy is left alone: a session still running an earlier plugin fires this hook
+# again on resume and compaction, and must not roll a fresh install back.
+install_outdated() {
+  local v; v=$(installed_version)
+  [ -z "$v" ] && return 0
+  [ "$v" != "$MG_VERSION" ] && [ "$(printf '%s\n%s\n' "$v" "$MG_VERSION" | sort -V | tail -n1)" = "$MG_VERSION" ]
 }
 
 # Copies text.sh, statusline.sh and lib.sh into place. Every file is staged first
@@ -65,7 +74,7 @@ if [[ "$cmd" != *model-guard* ]]; then
   msg="model-guard: statusline not set up yet — run /model-guard:setup (interactive, ~30 s). Silence this hint: echo 'SETUP_HINT=off' >> ~/.claude/model-guard.conf"
 else
   v_inst=$(installed_version)
-  if [ "$v_inst" != "$MG_VERSION" ]; then
+  if install_outdated; then
     if mg_install_scripts; then
       msg="model-guard: statusline refreshed to ${MG_VERSION} (was ${v_inst:-unknown}). Settings and config untouched."
     else
@@ -76,7 +85,7 @@ else
   # whether settings.json names it directly or a wrapper of the user's execs it,
   # so nothing needs to change on a plugin update. Only a complete install is
   # handed to, and only a model-guard copy is rewritten, never a user's script.
-  if grep -qs '^MG_VERSION=' "$legacy" && [ "$(installed_version)" = "$MG_VERSION" ]; then
+  if grep -qs '^MG_VERSION=' "$legacy" && ! install_outdated; then
     mg_write_handoff
   fi
 fi
