@@ -58,10 +58,14 @@ def official_version():
 
 
 def install_official(version):
-    """Install official standalone Codex `version`; it becomes the entry."""
-    script = urllib.request.urlopen(OFFICIAL_INSTALLER, timeout=60).read()
-    subprocess.run(["sh", "-s", "--", "--release", version], input=script, check=True,
-                   env={**os.environ, "CODEX_NON_INTERACTIVE": "1"})
+    """Install official standalone Codex `version`; it becomes the entry.
+
+    This is the command stock Codex runs for `codex update`, pinned to a
+    release. The script is fetched with curl because the host serves it to
+    curl and refuses plain library clients.
+    """
+    subprocess.run(["sh", "-c", 'curl -fsSL "$0" | sh -s -- --release "$1"', OFFICIAL_INSTALLER, version],
+                   check=True, env={**os.environ, "CODEX_NON_INTERACTIVE": "1"})
 
 
 def update(source=None, language=None):
@@ -82,5 +86,8 @@ def update(source=None, language=None):
         command = [sys.executable, str(source / "scripts/install.py")]
         if language:
             command += ["--language", language]
-        return subprocess.run(command).returncode
+        # The new installer resolves its own package; an inherited PYTHONPATH
+        # would otherwise leak this tree into the environment it creates.
+        environment = {name: value for name, value in os.environ.items() if name != "PYTHONPATH"}
+        return subprocess.run(command, env=environment).returncode
 
