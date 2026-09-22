@@ -1,8 +1,8 @@
 diff --git a/codex-rs/tui/src/app/app_server_event_targets.rs b/codex-rs/tui/src/app/app_server_event_targets.rs
-index 27359fd..79a119c 100644
+index 0054f79..eefd7ef 100644
 --- a/codex-rs/tui/src/app/app_server_event_targets.rs
 +++ b/codex-rs/tui/src/app/app_server_event_targets.rs
-@@ -133,6 +133,9 @@ pub(super) fn server_notification_thread_target(
+@@ -136,6 +136,9 @@ pub(super) fn server_notification_thread_target(
          }
          ServerNotification::ContextCompacted(notification) => Some(notification.thread_id.as_str()),
          ServerNotification::ModelRerouted(notification) => Some(notification.thread_id.as_str()),
@@ -13,18 +13,18 @@ index 27359fd..79a119c 100644
              Some(notification.thread_id.as_str())
          }
 diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
-index 40eadfa..6f17055 100644
+index 4e34536..9c2aa52 100644
 --- a/codex-rs/tui/src/chatwidget.rs
 +++ b/codex-rs/tui/src/chatwidget.rs
-@@ -430,6 +430,7 @@ mod status_controls;
- mod status_surfaces;
+@@ -442,6 +442,7 @@ mod status_surfaces;
  mod streaming;
  use self::status_surfaces::CachedProjectRootName;
+ mod thread_title_status;
 +mod model_guard;
  mod thread_usage;
  pub(crate) use self::thread_usage::ThreadUsageOutcome;
  mod tokens;
-@@ -780,6 +781,7 @@ pub(crate) struct ChatWidget {
+@@ -808,6 +809,7 @@ pub(crate) struct ChatWidget {
      status_line_workspace_messages_disabled: bool,
      // Cached backend-estimated cost and bounded refresh state for the current thread.
      thread_usage: thread_usage::ThreadUsageState,
@@ -33,18 +33,18 @@ index 40eadfa..6f17055 100644
      current_goal_status_indicator: Option<GoalStatusIndicator>,
      current_goal_status: Option<GoalStatusState>,
 diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
-index a1079ac..2c1fe44 100644
+index e0be308..b099241 100644
 --- a/codex-rs/tui/src/chatwidget/constructor.rs
 +++ b/codex-rs/tui/src/chatwidget/constructor.rs
-@@ -94,6 +94,7 @@ impl ChatWidget {
+@@ -96,6 +96,7 @@ impl ChatWidget {
              app_event_tx.clone(),
              pet_http_client.clone(),
          );
 +        let model_guard = model_guard::ModelGuard::from_config(&config);
          let mut widget = Self {
+             cyber_policy_notice: Default::default(),
              app_event_tx: app_event_tx.clone(),
-             frame_requester: frame_requester.clone(),
-@@ -254,6 +255,7 @@ impl ChatWidget {
+@@ -267,6 +268,7 @@ impl ChatWidget {
              status_line_workspace_headline_last_requested_at: None,
              status_line_workspace_messages_disabled: false,
              thread_usage: thread_usage::ThreadUsageState::default(),
@@ -641,7 +641,7 @@ index 0000000..84ae113
 +        .collect()
 +}
 diff --git a/codex-rs/tui/src/chatwidget/protocol.rs b/codex-rs/tui/src/chatwidget/protocol.rs
-index 48083eb..f31045a 100644
+index 9ec441a..7bb0dcf 100644
 --- a/codex-rs/tui/src/chatwidget/protocol.rs
 +++ b/codex-rs/tui/src/chatwidget/protocol.rs
 @@ -15,6 +15,8 @@ impl ChatWidget {
@@ -650,10 +650,10 @@ index 48083eb..f31045a 100644
  
 +        self.observe_model_guard(&notification, replay_kind);
 +
-         let was_replaying_turn_completion = self.thread_usage.replaying_turn_completion;
-         self.thread_usage.replaying_turn_completion = replay_kind.is_some();
-         let from_replay = replay_kind.is_some();
-@@ -145,7 +147,7 @@ impl ChatWidget {
+         if replay_kind != Some(ReplayKind::ResumeInitialMessages)
+             && !self.recover_resumed_reasoning(&notification)
+         {
+@@ -197,7 +199,7 @@ impl ChatWidget {
              ServerNotification::SkillsChanged(_) => {
                  self.refresh_skills_for_current_cwd(/*force_reload*/ true);
              }
@@ -663,12 +663,12 @@ index 48083eb..f31045a 100644
                  self.on_app_server_model_verification(&notification.verifications)
              }
 diff --git a/codex-rs/tui/src/chatwidget/rendering.rs b/codex-rs/tui/src/chatwidget/rendering.rs
-index 693ede4..51b9df0 100644
+index 8163ae2..6f43db7 100644
 --- a/codex-rs/tui/src/chatwidget/rendering.rs
 +++ b/codex-rs/tui/src/chatwidget/rendering.rs
-@@ -76,6 +76,17 @@ impl ChatWidget {
-                     /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-                 )),
+@@ -205,6 +205,17 @@ impl ChatWidget {
+                 /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+             )),
          );
 +        if let Some(lines) = self.model_guard_lines()
 +            && lines.len() > 1
@@ -685,13 +685,13 @@ index 693ede4..51b9df0 100644
      }
  
 diff --git a/codex-rs/tui/src/chatwidget/replay.rs b/codex-rs/tui/src/chatwidget/replay.rs
-index cb2c8d8..59f3abe 100644
+index 0fb1efd..b2143e7 100644
 --- a/codex-rs/tui/src/chatwidget/replay.rs
 +++ b/codex-rs/tui/src/chatwidget/replay.rs
-@@ -18,6 +18,9 @@ impl ChatWidget {
-             }))
-             .collect::<Vec<_>>();
-         for (turn, hidden_nested_review_turn) in turns.into_iter().zip(hidden_nested_review_turns) {
+@@ -120,6 +120,9 @@ impl ChatWidget {
+             {
+                 continue;
+             }
 +            if !hidden_nested_review_turn {
 +                self.restore_model_guard_turn(&turn);
 +            }
@@ -699,10 +699,10 @@ index cb2c8d8..59f3abe 100644
                  id: turn_id,
                  items_view: _,
 diff --git a/codex-rs/tui/src/chatwidget/settings.rs b/codex-rs/tui/src/chatwidget/settings.rs
-index 74d3e7f..c0a5229 100644
+index c630d43..1bda5c8 100644
 --- a/codex-rs/tui/src/chatwidget/settings.rs
 +++ b/codex-rs/tui/src/chatwidget/settings.rs
-@@ -242,6 +242,9 @@ impl ChatWidget {
+@@ -259,6 +259,9 @@ impl ChatWidget {
          self.status_line_workspace_headline_last_requested_at = None;
          self.status_line_workspace_messages_disabled = false;
          self.clear_thread_usage_state();
@@ -713,10 +713,10 @@ index 74d3e7f..c0a5229 100644
          self.plan_type = plan_type;
          self.has_chatgpt_account = has_chatgpt_account;
 diff --git a/codex-rs/tui/src/chatwidget/slash_dispatch.rs b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-index 7f2028f..f563007 100644
+index f67ece5..a9cdc39 100644
 --- a/codex-rs/tui/src/chatwidget/slash_dispatch.rs
 +++ b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-@@ -473,6 +473,7 @@ impl ChatWidget {
+@@ -488,6 +488,7 @@ impl ChatWidget {
                          /*refreshing_rate_limits*/ false, /*request_id*/ None,
                      );
                  }
@@ -725,16 +725,16 @@ index 7f2028f..f563007 100644
              SlashCommand::Cd => {
                  self.dispatch_command_with_args(SlashCommand::Cd, "~".to_string(), Vec::new());
 diff --git a/codex-rs/tui/src/chatwidget/status_surfaces.rs b/codex-rs/tui/src/chatwidget/status_surfaces.rs
-index e79c0d3..8e056b3 100644
+index 1059d78..06bed48 100644
 --- a/codex-rs/tui/src/chatwidget/status_surfaces.rs
 +++ b/codex-rs/tui/src/chatwidget/status_surfaces.rs
-@@ -213,10 +213,25 @@ impl ChatWidget {
+@@ -215,10 +215,25 @@ impl ChatWidget {
              }
          }
  
 -        self.set_status_line(status_line_from_segments(
 -            segments,
--            self.config.tui_status_line_use_colors,
+-            self.local_settings.tui.status_line_use_colors,
 -        ));
 +        let line = if let Some(mut guard_lines) = self.model_guard_lines() {
 +            let mut line = guard_lines.remove(0);
@@ -745,14 +745,14 @@ index e79c0d3..8e056b3 100644
 +                )
 +            });
 +            if let Some(extra) =
-+                status_line_from_segments(segments, self.config.tui_status_line_use_colors)
++                status_line_from_segments(segments, self.local_settings.tui.status_line_use_colors)
 +            {
 +                line.spans.push(" · ".dim());
 +                line.spans.extend(extra.spans);
 +            }
 +            Some(line)
 +        } else {
-+            status_line_from_segments(segments, self.config.tui_status_line_use_colors)
++            status_line_from_segments(segments, self.local_settings.tui.status_line_use_colors)
 +        };
 +        self.set_status_line(line);
          let hyperlink_url = selections

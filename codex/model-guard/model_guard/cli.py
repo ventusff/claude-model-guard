@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 from . import __version__, sessions
@@ -30,15 +31,29 @@ def command_probe(args):
     return result["exit_code"]
 
 
+def command_update(args):
+    from .update import update
+
+    return update(args.source, args.language)
+
+
 def command_doctor(args):
     from .install import sha256
+    from .update import official_version
 
     state = installed_state()
     binary = Path(state["native_binary"])
     entry = Path(state["entry"])
     intact = binary.is_file() and sha256(binary) == state["binary_sha256"]
     active = entry.is_symlink() and entry.resolve() == binary
-    print(f"Model Guard {__version__} · native Codex build\nEntry: {entry}\nRuntime intact: {intact}\nEntry active: {active}")
+    official = official_version()
+    print(f"Model Guard {__version__} · native Codex {state.get('codex_version', 'build')}\nEntry: {entry}\nRuntime intact: {intact}\nEntry active: {active}")
+    if official:
+        print(f"Official standalone Codex: {official}")
+    if not active:
+        print("The entry runs another executable, usually because an official installer or `codex update` replaced it; `model-guard-codex update` puts Model Guard back on the plugin's current Codex version.")
+    elif official and state.get("codex_version") and official != state["codex_version"]:
+        print("The official package and this build differ; `model-guard-codex update` moves both to the plugin's current Codex version.")
     stale = sessions.not_running(binary)
     if stale:
         print(f"{len(stale)} running Codex session(s) still use another executable; finish or /quit each one, then `codex resume` in its directory:")
@@ -70,6 +85,10 @@ def parser():
     probe_command.add_argument("--timeout", type=int, default=120, choices=range(1, 601), metavar="SECONDS")
     probe_command.set_defaults(handler=command_probe)
     commands.add_parser("doctor", help="Verify the installed native executable and list sessions on another executable").set_defaults(handler=command_doctor)
+    update_command = commands.add_parser("update", help="Install the plugin's current release, official Codex version included; `codex update` in a Model Guard build runs this")
+    update_command.add_argument("--source", type=Path, help="Plugin checkout to install from instead of downloading the repository")
+    update_command.add_argument("--language", choices=("en", "zh"))
+    update_command.set_defaults(handler=command_update)
     commands.add_parser("remove", help="Restore the original official Codex executable symlink").set_defaults(handler=command_remove)
     for legacy in ("status", "check"):
         commands.add_parser(legacy, help=argparse.SUPPRESS).set_defaults(handler=command_redirect)
@@ -91,7 +110,7 @@ def main(argv=None):
         return 0
     try:
         return args.handler(args)
-    except (RuntimeError, OSError, ValueError, KeyError) as exc:
+    except (RuntimeError, OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
         print(f"Model Guard: {exc}", file=sys.stderr)
         return 1
 

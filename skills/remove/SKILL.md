@@ -47,4 +47,4 @@ b) If deleting files: `rm -rf ~/.claude/model-guard; rm -f ~/.claude/model-guard
 - StatusLine unregistered (and previous statusline restored, if there was one);
   a timestamped settings backup was kept.
 - The plugin itself can be uninstalled with `/plugin` → Manage plugins, or
-  `claude plugin uninstall model-guard@claude-model-guard`.
+  `claude plugin uninstall model-guard@cli-model-guard`.

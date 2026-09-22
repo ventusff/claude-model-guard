@@ -17,6 +17,10 @@ HELPERS = {
     "codex-resources/zsh/bin/zsh": "--zsh-bin",
     "codex-path/rg": "--rg-bin",
 }
+# The voice runtime ships as a directory whose manifest lists every file's
+# digest; the manifest itself is pinned and each listed runtime file is checked.
+VOICE = "codex-resources/voice"
+VOICE_MANIFEST = VOICE + "/manifest.json"
 
 
 def digest(path):
@@ -26,6 +30,15 @@ def digest(path):
 
 def run(args, **kwargs):
     subprocess.run([str(arg) for arg in args], check=True, **kwargs)
+
+
+def verify_voice(official, release):
+    manifest = official / VOICE_MANIFEST
+    if digest(manifest) != release["helper_sha256"][VOICE_MANIFEST]:
+        raise RuntimeError("Official voice runtime manifest differs from the pinned release")
+    for relative, expected in json.loads(manifest.read_text())["sha256"].items():
+        if relative.startswith(VOICE + "/") and digest(official / relative) != expected:
+            raise RuntimeError(f"Official voice runtime file differs from its manifest: {relative}")
 
 
 def prepare(work, release):
@@ -69,6 +82,7 @@ def main():
     for relative in HELPERS:
         if digest(official / relative) != release["helper_sha256"][relative]:
             raise RuntimeError(f"Official helper differs from the pinned release: {relative}")
+    verify_voice(official, release)
     env = dict(os.environ, CARGO_BUILD_JOBS=str(args.jobs), CARGO_TARGET_DIR=str(work / "target"), CARGO_PROFILE_RELEASE_DEBUG="0")
     run(["cargo", "+" + release["rust_version"], "build", "--locked", "--release", "-p", "codex-cli", "--bin", "codex"], cwd=source / "codex-rs", env=env)
     binary = work / "target/release/codex"
@@ -83,6 +97,8 @@ def main():
     run(command, env=dict(env, CODEX_REPO_ROOT=str(source)))
     for name in ("LICENSE", "NOTICE"):
         shutil.copy2(source / name, package / name)
+    shutil.copytree(official / VOICE, package / VOICE, symlinks=True)
+    (package / "codex").symlink_to("bin/codex")
     archive = work / "model-guard-codex-linux-x86_64.tar.gz"
     with tarfile.open(archive, "w:gz") as bundle:
         for child in sorted(package.iterdir()):

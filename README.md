@@ -69,8 +69,8 @@ Two details worth knowing:
 ## Install
 
 ```
-/plugin marketplace add ventusff/claude-model-guard
-/plugin install model-guard@claude-model-guard
+/plugin marketplace add ventusff/cli-model-guard
+/plugin install model-guard@cli-model-guard
 /model-guard:setup
 ```
 
@@ -103,19 +103,20 @@ python3 codex/model-guard/scripts/install.py --language en
 model-guard-codex doctor
 ```
 
-The prebuilt runtime supports **Linux x86_64, glibc 2.39+, Python 3.12+ and the official standalone Codex 0.153.4**. The installer verifies a release checksum, prepares a versioned package and atomically switches the existing `~/.local/bin/codex` symlink. Your next `codex` or `cx resume` invocation picks it up in the current shell.
+The prebuilt runtime supports **Linux x86_64, glibc 2.36+, Python 3.12+ and the official standalone Codex 0.155.1**. The installer verifies a release checksum, prepares a versioned package and atomically switches the existing `~/.local/bin/codex` symlink. Your next `codex` or `cx resume` invocation picks it up in the current shell.
 
 A running Codex process keeps the executable it started with, so an open session never gains Model Guard by installation alone; that is how every native program behaves, and no installer can change it. Instead of leaving you to wonder, the installer and `doctor` list the sessions still on another executable, with their directories: finish or `/quit` each one, then `codex resume` there. Earlier versioned packages no session uses any more are removed.
 
 This is a disclosed **custom build of official Codex**, pinned to one source commit, with reviewable patches and a [build recipe](codex/model-guard/native/README.md). Stock Codex does not currently expose a plugin footer renderer. Model Guard adds metadata and native rendering inside that source; it adds no tmux server, terminal proxy, provider proxy or transport logging. Account and quota handling use Codex's existing state. Model/provider defaults and login files are not changed. The supplied package includes the official code-mode host and sandbox helpers from the same release.
 
-Native builds must be updated together with the plugin. Replacing the Codex entry through a separate official installation can remove the native extension; `doctor` detects that condition. An explicit remote app-server must run the same metadata extension for complete routing details; connection and CLI semantics remain native.
+Native builds must be updated together with the plugin, and the plugin tracks one official Codex version at a time. **Update with `model-guard-codex update`**, never with the official installer alone: it downloads the plugin's current release, brings the official standalone package to the Codex version that release tracks (with OpenAI's own installer), then installs the native package on top. Inside a Model Guard build, `codex update` and the update banner run exactly that command, and the banner compares against the plugin's release rather than upstream's latest tag, so a stock update can no longer replace the guard behind your back. If an official installer did replace the entry (`curl … install.sh | sh` does), `doctor` says so and names the command. An explicit remote app-server must run the same metadata extension for complete routing details; connection and CLI semantics remain native.
 
 Display preferences live in `~/.local/share/model-guard-codex/config.json`: `language` (`en` or `zh`) and `show_account` (boolean). `MODEL_GUARD_CODEX_HOME` selects another installation root. Disable the plugin in Codex to disable its display.
 
 ```sh
 model-guard-codex probe --json   # A separate read-only request; consumes provider quota
-model-guard-codex doctor        # Verify the native executable and list sessions on another one
+model-guard-codex doctor        # Verify the native executable, compare it with the official package, list sessions on another one
+model-guard-codex update        # Move to the plugin's current release, official Codex version included
 model-guard-codex remove        # Restore the original official executable symlink
 ```
 

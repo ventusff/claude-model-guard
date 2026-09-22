@@ -1,0 +1,128 @@
+diff --git a/codex-rs/tui/src/update_action.rs b/codex-rs/tui/src/update_action.rs
+index 225c457..332fbf8 100644
+--- a/codex-rs/tui/src/update_action.rs
++++ b/codex-rs/tui/src/update_action.rs
+@@ -22,6 +22,9 @@ pub enum UpdateAction {
+     StandaloneUnix,
+     /// Update via `$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex`.
+     StandaloneWindows,
++    /// Update via `model-guard-codex update`: this executable is a Model Guard
++    /// build, and the official installer would replace it with stock Codex.
++    ModelGuard,
+ }
+ 
+ impl UpdateAction {
+@@ -65,6 +68,7 @@ impl UpdateAction {
+                     "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
+                 ],
+             ),
++            UpdateAction::ModelGuard => ("model-guard-codex", &["update"]),
+         }
+     }
+ 
+@@ -78,15 +82,68 @@ impl UpdateAction {
+ 
+ #[cfg(not(debug_assertions))]
+ pub fn get_update_action() -> Option<UpdateAction> {
++    let root = std::env::var_os("MODEL_GUARD_CODEX_HOME")
++        .map(std::path::PathBuf::from)
++        .or_else(|| dirs::home_dir().map(|home| home.join(".local/share/model-guard-codex")));
++    if runs_from_model_guard(root.as_deref(), std::env::current_exe().ok().as_deref()) {
++        return Some(UpdateAction::ModelGuard);
++    }
+     UpdateAction::from_install_context(InstallContext::current())
+ }
+ 
++/// Whether `exe` is one of the versioned native packages under the Model
++/// Guard installation root. Both paths are canonicalized, so the entry
++/// symlink and the package directory are compared by what they resolve to.
++#[cfg(any(not(debug_assertions), test))]
++fn runs_from_model_guard(root: Option<&std::path::Path>, exe: Option<&std::path::Path>) -> bool {
++    let (Some(root), Some(exe)) = (root, exe) else {
++        return false;
++    };
++    match (
++        std::fs::canonicalize(root.join("native")),
++        std::fs::canonicalize(exe),
++    ) {
++        (Ok(native), Ok(exe)) => exe.starts_with(native),
++        _ => false,
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+     use codex_utils_absolute_path::AbsolutePathBuf;
+     use pretty_assertions::assert_eq;
+ 
++    #[test]
++    fn model_guard_packages_are_recognized_by_installation_root() {
++        let home = tempfile::tempdir().expect("temp dir");
++        let package = home.path().join("native/1.9.0-abcd1234/bin");
++        std::fs::create_dir_all(&package).expect("package dir");
++        let exe = package.join("codex");
++        std::fs::write(&exe, b"").expect("exe");
++        let entry = home.path().join("bin");
++        std::fs::create_dir_all(&entry).expect("entry dir");
++        std::os::unix::fs::symlink(&exe, entry.join("codex")).expect("entry link");
++        assert!(runs_from_model_guard(Some(home.path()), Some(&exe)));
++        assert!(runs_from_model_guard(
++            Some(home.path()),
++            Some(&entry.join("codex"))
++        ));
++        let elsewhere = home.path().join("official");
++        std::fs::create_dir_all(&elsewhere).expect("official dir");
++        std::fs::write(elsewhere.join("codex"), b"").expect("official exe");
++        assert!(!runs_from_model_guard(
++            Some(home.path()),
++            Some(&elsewhere.join("codex"))
++        ));
++        assert!(!runs_from_model_guard(None, Some(&exe)));
++        assert!(!runs_from_model_guard(Some(home.path()), None));
++        assert_eq!(
++            UpdateAction::ModelGuard.command_args(),
++            ("model-guard-codex", &["update"][..])
++        );
++    }
++
+     #[test]
+     fn maps_install_context_to_update_action() {
+         let native_release_dir =
+diff --git a/codex-rs/tui/src/updates.rs b/codex-rs/tui/src/updates.rs
+index b801426..c0fc899 100644
+--- a/codex-rs/tui/src/updates.rs
++++ b/codex-rs/tui/src/updates.rs
+@@ -60,6 +60,14 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
+ // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
+ const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
+ const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
++// A Model Guard build can only move to the Codex version its plugin tracks.
++const MODEL_GUARD_RELEASE_URL: &str =
++    "https://raw.githubusercontent.com/ventusff/cli-model-guard/main/codex/model-guard/native/release.json";
++
++#[derive(Deserialize, Debug, Clone)]
++struct ModelGuardRelease {
++    codex_version: String,
++}
+ 
+ #[derive(Deserialize, Debug, Clone)]
+ struct ReleaseInfo {
+@@ -112,6 +120,17 @@ async fn check_for_update(
+         Some(UpdateAction::StandaloneUnix) | Some(UpdateAction::StandaloneWindows) | None => {
+             fetch_latest_github_release_version(&client_pool).await?
+         }
++        Some(UpdateAction::ModelGuard) => {
++            client_pool
++                .get(MODEL_GUARD_RELEASE_URL)
++                .headers(default_headers())
++                .send()
++                .await?
++                .error_for_status()?
++                .json::<ModelGuardRelease>()
++                .await?
++                .codex_version
++        }
+     };
+ 
+     // Preserve any previously dismissed version if present.

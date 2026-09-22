@@ -69,8 +69,8 @@ session 进行到一半撞上用量限额，Claude Code **静默**回退到更�
 ## 安装
 
 ```
-/plugin marketplace add ventusff/claude-model-guard
-/plugin install model-guard@claude-model-guard
+/plugin marketplace add ventusff/cli-model-guard
+/plugin install model-guard@cli-model-guard
 /model-guard:setup
 ```
 
@@ -103,19 +103,20 @@ python3 codex/model-guard/scripts/install.py --language zh
 model-guard-codex doctor
 ```
 
-预编译运行时支持 **Linux x86_64、glibc 2.39+、Python 3.12+，以及官方独立安装版 Codex 0.153.4**。安装器校验发布包、准备独立版本目录，再原子切换现有的 `~/.local/bin/codex` 软链接。在当前 shell 下一次执行 `codex` 或 `cx resume` 即可使用。
+预编译运行时支持 **Linux x86_64、glibc 2.36+、Python 3.12+，以及官方独立安装版 Codex 0.155.1**。安装器校验发布包、准备独立版本目录，再原子切换现有的 `~/.local/bin/codex` 软链接。在当前 shell 下一次执行 `codex` 或 `cx resume` 即可使用。
 
 一个正在运行的 Codex 进程会一直用它启动时的那个可执行文件，所以已经开着的会话不会因为安装而带上 Model Guard——任何原生程序都是这样，安装器改不了。安装器和 `doctor` 会把还跑在别的可执行文件上的会话连同目录一起列出来：把它们做完或 `/quit`，再在那个目录 `codex resume` 即可。不再被任何会话使用的旧版本包会被清掉。
 
 这是明确披露的**官方 Codex 源码定制构建**，固定源码提交，提供可审查补丁和[构建说明](codex/model-guard/native/README.md)。官方 Codex 目前没有插件页脚渲染接口，因此 Model Guard 在源码内部加入元数据和原生渲染。不增加 tmux 服务、终端代理、服务商代理或传输日志。账号和额度复用 Codex 自身状态；不修改默认模型、服务商或登录文件。发布包保留同一官方版本的 code-mode host 和沙箱辅助程序。
 
-原生构建需要随插件配套更新。另行安装官方 Codex、替换命令入口时，可能移除原生扩展；`doctor` 会检测这种情况。显式连接远端 app-server 时，远端也需要相同的元数据扩展才能提供完整路由信息，连接和命令行行为仍由原生 Codex 处理。
+原生构建需要随插件配套更新，插件每次只跟一个官方 Codex 版本。**升级用 `model-guard-codex update`**，不要单独跑官方安装脚本：它会下载插件当前的发布版，用 OpenAI 自己的安装脚本把官方独立安装版换到该发布版对应的 Codex 版本，再把原生包装上去。在 Model Guard 构建里敲 `codex update`、或点更新提示，执行的就是这条命令；更新提示比对的是插件的发布记录，不是上游最新标签，所以官方更新不会再悄悄把 guard 挤掉。要是官方安装脚本已经把入口换掉了（`curl … install.sh | sh` 就会），`doctor` 会说明并给出该跑的命令。显式连接远端 app-server 时，远端也需要相同的元数据扩展才能提供完整路由信息，连接和命令行行为仍由原生 Codex 处理。
 
 显示配置位于 `~/.local/share/model-guard-codex/config.json`：`language`（`en` 或 `zh`）和 `show_account`（布尔值）。`MODEL_GUARD_CODEX_HOME` 可指定其他安装目录。在 Codex 中禁用插件即可关闭其显示。
 
 ```sh
 model-guard-codex probe --json   # 单独发起只读请求，消耗服务商用量
-model-guard-codex doctor        # 核验原生可执行文件，列出还在用别的可执行文件的会话
+model-guard-codex doctor        # 核验原生可执行文件，与官方包比对版本，列出还在用别的可执行文件的会话
+model-guard-codex update        # 升到插件当前发布版，连同对应的官方 Codex 版本
 model-guard-codex remove        # 恢复原官方可执行文件软链接
 ```
 

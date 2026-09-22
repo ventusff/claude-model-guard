@@ -1,13 +1,13 @@
 {
   "name": "model-guard",
-  "version": "1.7.1",
+  "version": "1.9.0",
   "description": "Native Codex status line for model routing, reasoning anomalies and account identity.",
   "author": {
     "name": "ventusff",
     "url": "https://github.com/ventusff"
   },
-  "homepage": "https://github.com/ventusff/claude-model-guard#codex-cli",
-  "repository": "https://github.com/ventusff/claude-model-guard",
+  "homepage": "https://github.com/ventusff/cli-model-guard#codex-cli",
+  "repository": "https://github.com/ventusff/cli-model-guard",
   "license": "MIT",
   "skills": "./skills/",
   "interface": {

@@ -233,7 +233,7 @@ def install_locked(source, language, native_package, entry):
         cfg["language"] = language
     atomic_json(cfg_path, cfg)
     (root / "bin").mkdir(exist_ok=True)
-    state = {"version": __version__, "entry": str(entry), "original_entry": original,
+    state = {"version": __version__, "codex_version": release["codex_version"], "entry": str(entry), "original_entry": original,
              "native_binary": str(package / "bin/codex"), "binary_sha256": sha256(package / "bin/codex"),
              "package_sha256": release["sha256"], "upstream_commit": release["upstream_commit"],
              "environment": str(environment)}

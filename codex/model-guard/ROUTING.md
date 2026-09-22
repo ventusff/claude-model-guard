@@ -166,6 +166,8 @@ Every Code was additionally inspected at `07533447f713d39763047543cc19e1015a3a6a
 
 ## What official Codex 0.153.4 exposes
 
+Re-checked against the 0.155.1 source (`be2951ea34f0d295ed0becf97079f92fa5f6950e`, 2026-09-22): unchanged. Stock still discards the response body's `model` label (`process_sse_ignores_response_model_field_in_payload` remains in `codex-api/src/sse/responses.rs`), and the only stock warning is the header-based reroute, which is still worded as a cyber-safety fallback whatever the actual reason. Hooks arrived in 0.155 but receive the requested model only. The label observed in the wild that month was `gpt-5.6-luna` on a `gpt-6-astra` request, another family, which the rule below shows in orange.
+
 The official [`tui.status_line` setting](https://learn.chatgpt.com/docs/config-file/config-reference) accepts built-in item identifiers. The exact release's [status item enum](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/tui/src/bottom_pane/status_line_setup.rs) has no external renderer or account-email item. A plugin cannot register a Claude-style native `statusLine.command`.
 
 For routing, these are the relevant source boundaries:

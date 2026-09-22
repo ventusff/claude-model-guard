@@ -1,6 +1,6 @@
 {
-  "name": "claude-model-guard",
-  "description": "Home of model-guard — the statusline that catches silent model downgrades in Claude Code.",
+  "name": "cli-model-guard",
+  "description": "Home of model-guard — the statusline that catches silent model downgrades in Claude Code, and the native Codex build that shows where a request was routed.",
   "owner": {
     "name": "ventusff",
     "url": "https://github.com/ventusff"

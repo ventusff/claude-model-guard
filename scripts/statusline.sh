@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # model-guard — a Claude Code statusline that catches silent model downgrades.
-# https://github.com/ventusff/claude-model-guard
+# https://github.com/ventusff/cli-model-guard
 #
 # One full-width, theme-proof color band: model + reasoning effort + context + usage +
 # working directory + account.

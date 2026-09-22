@@ -1,8 +1,8 @@
 diff --git a/codex-rs/app-server-protocol/src/protocol/common.rs b/codex-rs/app-server-protocol/src/protocol/common.rs
-index 6c00f88..1ec3c6e 100644
+index 70954a3..3a7857e 100644
 --- a/codex-rs/app-server-protocol/src/protocol/common.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/common.rs
-@@ -1916,6 +1916,8 @@ server_notification_definitions! {
+@@ -1983,6 +1983,8 @@ server_notification_definitions! {
      /// Deprecated: Use `ContextCompaction` item type instead.
      ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
      ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
@@ -39,10 +39,10 @@ index f59451e..00064af 100644
  #[serde(rename_all = "camelCase")]
  #[ts(export_to = "v2/")]
 diff --git a/codex-rs/app-server/src/bespoke_event_handling.rs b/codex-rs/app-server/src/bespoke_event_handling.rs
-index 91cda28..701f60a 100644
+index be146d8..267c855 100644
 --- a/codex-rs/app-server/src/bespoke_event_handling.rs
 +++ b/codex-rs/app-server/src/bespoke_event_handling.rs
-@@ -410,6 +410,22 @@ pub(crate) async fn apply_bespoke_event_handling(
+@@ -415,6 +415,22 @@ pub(crate) async fn apply_bespoke_event_handling(
                  .send_server_notification(ServerNotification::ModelRerouted(notification))
                  .await;
          }
@@ -66,10 +66,10 @@ index 91cda28..701f60a 100644
              let notification = ModelVerificationNotification {
                  thread_id: conversation_id.to_string(),
 diff --git a/codex-rs/app-server/src/notification_media.rs b/codex-rs/app-server/src/notification_media.rs
-index 844a312..2c04527 100644
+index 04e57f8..cad68d5 100644
 --- a/codex-rs/app-server/src/notification_media.rs
 +++ b/codex-rs/app-server/src/notification_media.rs
-@@ -108,6 +108,7 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
+@@ -110,6 +110,7 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
          | ServerNotification::ReasoningTextDelta(_)
          | ServerNotification::ContextCompacted(_)
          | ServerNotification::ModelRerouted(_)
@@ -78,10 +78,10 @@ index 844a312..2c04527 100644
          | ServerNotification::AuthRecoveryStarted(_)
          | ServerNotification::AuthRecoveryCompleted(_)
 diff --git a/codex-rs/codex-api/src/common.rs b/codex-rs/codex-api/src/common.rs
-index 5adfe8d..54c2baf 100644
+index 03e69b3..dfbbf3f 100644
 --- a/codex-rs/codex-api/src/common.rs
 +++ b/codex-rs/codex-api/src/common.rs
-@@ -103,6 +103,10 @@ pub enum ResponseEvent {
+@@ -88,6 +88,10 @@ pub enum ResponseEvent {
      /// Emitted when the server includes `OpenAI-Model` on the stream response.
      /// This can differ from the requested model when backend safety routing applies.
      ServerModel(String),
@@ -120,7 +120,7 @@ index 95d41e0..1bf9358 100644
                      && tx_event
                          .send(Ok(ResponseEvent::ModelVerifications(verifications)))
 diff --git a/codex-rs/codex-api/src/sse/responses.rs b/codex-rs/codex-api/src/sse/responses.rs
-index abef246..639b8f2 100644
+index e4f5f04..35eb8fb 100644
 --- a/codex-rs/codex-api/src/sse/responses.rs
 +++ b/codex-rs/codex-api/src/sse/responses.rs
 @@ -216,6 +216,16 @@ impl ResponsesStreamEvent {
@@ -140,7 +140,7 @@ index abef246..639b8f2 100644
      pub(crate) fn turn_state(&self) -> Option<String> {
          if self.kind() != "response.metadata" {
              return None;
-@@ -571,6 +581,7 @@ async fn process_sse_with_treatment(
+@@ -575,6 +585,7 @@ async fn process_sse_with_treatment(
      let mut stream = stream.eventsource();
      let mut response_error: Option<ApiError> = None;
      let mut last_server_model: Option<String> = None;
@@ -148,7 +148,7 @@ index abef246..639b8f2 100644
  
      loop {
          let start = Instant::now();
-@@ -631,6 +642,18 @@ async fn process_sse_with_treatment(
+@@ -639,6 +650,18 @@ async fn process_sse_with_treatment(
              }
              last_server_model = Some(model);
          }
@@ -167,7 +167,7 @@ index abef246..639b8f2 100644
          if let Some(verifications) = model_verifications
              && tx_event
                  .send(Ok(ResponseEvent::ModelVerifications(verifications)))
-@@ -1558,7 +1581,7 @@ mod tests {
+@@ -1566,7 +1589,7 @@ mod tests {
      }
  
      #[tokio::test]
@@ -176,12 +176,12 @@ index abef246..639b8f2 100644
          let events = run_sse(vec![
              json!({
                  "type": "response.created",
-@@ -1577,10 +1600,19 @@ mod tests {
+@@ -1585,10 +1608,19 @@ mod tests {
          ])
          .await;
  
 -        assert_eq!(events.len(), 2);
--        assert_matches!(&events[0], ResponseEvent::Created);
+-        assert_matches!(&events[0], ResponseEvent::Created { .. });
 +        assert_eq!(events.len(), 3);
 +        assert!(
 +            !events
@@ -193,17 +193,17 @@ index abef246..639b8f2 100644
 +            &events[0],
 +            ResponseEvent::ResponseModelLabel(label) if label == CYBER_RESTRICTED_MODEL_FOR_TESTS
 +        );
-+        assert_matches!(&events[1], ResponseEvent::Created);
++        assert_matches!(&events[1], ResponseEvent::Created { .. });
 +        assert_matches!(
 +            &events[2],
              ResponseEvent::Completed {
                  response_id,
                  token_usage: None,
 diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
-index 9f03c93..2c64f4c 100644
+index d46a98e..2ac7df7 100644
 --- a/codex-rs/core/src/client.rs
 +++ b/codex-rs/core/src/client.rs
-@@ -121,6 +121,8 @@ use crate::attestation::X_OAI_ATTESTATION_HEADER;
+@@ -120,6 +120,8 @@ use crate::attestation::X_OAI_ATTESTATION_HEADER;
  use crate::client_common::Prompt;
  use crate::client_common::ResponseEvent;
  use crate::client_common::ResponseStream;
@@ -212,7 +212,7 @@ index 9f03c93..2c64f4c 100644
  use crate::context::BaseInstructionsFragment;
  use crate::context::ContextualUserFragment;
  use crate::cyber_access_program;
-@@ -296,6 +298,7 @@ pub struct ModelClient {
+@@ -250,6 +252,7 @@ pub struct ModelClient {
      prompt_cache_key_override: Option<String>,
      free_guardian_enabled: bool,
      event_sender: Option<Sender<ProtocolEvent>>,
@@ -220,7 +220,7 @@ index 9f03c93..2c64f4c 100644
      http_client_factory: HttpClientFactory,
  }
  
-@@ -518,6 +521,7 @@ impl ModelClient {
+@@ -475,6 +478,7 @@ impl ModelClient {
              prompt_cache_key_override: None,
              free_guardian_enabled: false,
              event_sender: None,
@@ -228,7 +228,7 @@ index 9f03c93..2c64f4c 100644
              http_client_factory,
          }
      }
-@@ -531,9 +535,11 @@ impl ModelClient {
+@@ -488,9 +492,11 @@ impl ModelClient {
          mut self,
          prompt_cache_key_override: Option<String>,
          event_sender: Sender<ProtocolEvent>,
@@ -240,7 +240,7 @@ index 9f03c93..2c64f4c 100644
          self
      }
  
-@@ -1647,16 +1653,21 @@ impl ModelClientSession {
+@@ -1575,16 +1581,21 @@ impl ModelClientSession {
              )
              .with_endpoint(endpoint)
              .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
@@ -263,7 +263,7 @@ index 9f03c93..2c64f4c 100644
                      return Ok(stream);
                  }
                  Err(ApiError::Transport(unauthorized_transport))
-@@ -1881,6 +1892,13 @@ impl ModelClientSession {
+@@ -1826,6 +1837,13 @@ impl ModelClientSession {
                          "websocket connection is unavailable".to_string(),
                      ))
                  })?;
@@ -277,7 +277,7 @@ index 9f03c93..2c64f4c 100644
              let stream_result = websocket_connection
                  .stream_request(
                      ws_request,
-@@ -1905,12 +1923,13 @@ impl ModelClientSession {
+@@ -1850,12 +1868,13 @@ impl ModelClientSession {
                  );
                  err
              })?;
@@ -292,7 +292,7 @@ index 9f03c93..2c64f4c 100644
              self.websocket_session.last_response_rx = Some(last_request_rx);
              return Ok(WebsocketStreamOutcome::Stream(stream));
          }
-@@ -2304,6 +2323,7 @@ where
+@@ -2249,6 +2268,7 @@ where
  
      (
          ResponseStream {
@@ -301,10 +301,10 @@ index 9f03c93..2c64f4c 100644
              consumer_dropped: consumer_dropped_for_stream,
          },
 diff --git a/codex-rs/core/src/client_common.rs b/codex-rs/core/src/client_common.rs
-index f2d6be2..e9247ed 100644
+index 96cd7ea..a6243bd 100644
 --- a/codex-rs/core/src/client_common.rs
 +++ b/codex-rs/core/src/client_common.rs
-@@ -106,6 +106,7 @@ fn strip_image_details(items: &mut [ResponseItem]) {
+@@ -116,6 +116,7 @@ fn normalize_image_detail(detail: &mut Option<ImageDetail>, model_info: &ModelIn
  }
  
  pub struct ResponseStream {
@@ -357,10 +357,10 @@ index 0000000..c489198
 +    }
 +}
 diff --git a/codex-rs/core/src/compact_remote_v2.rs b/codex-rs/core/src/compact_remote_v2.rs
-index 68e2eae..c87a85b 100644
+index 376ad06..08f7a87 100644
 --- a/codex-rs/core/src/compact_remote_v2.rs
 +++ b/codex-rs/core/src/compact_remote_v2.rs
-@@ -811,6 +811,7 @@ mod tests {
+@@ -827,6 +827,7 @@ mod tests {
          }
          drop(tx_event);
          ResponseStream {
@@ -369,10 +369,10 @@ index 68e2eae..c87a85b 100644
              consumer_dropped: CancellationToken::new(),
          }
 diff --git a/codex-rs/core/src/session/session.rs b/codex-rs/core/src/session/session.rs
-index 6d1953e..767af84 100644
+index 1f2a4b0..7919cee 100644
 --- a/codex-rs/core/src/session/session.rs
 +++ b/codex-rs/core/src/session/session.rs
-@@ -1474,6 +1474,7 @@ impl Session {
+@@ -1565,6 +1565,7 @@ impl Session {
                          session_configuration.parent_thread_id,
                      ),
                      tx_event.clone(),
@@ -381,10 +381,10 @@ index 6d1953e..767af84 100644
                  executed_tool_calls: executed_tool_calls.clone(),
                  code_mode_service: crate::tools::code_mode::CodeModeService::new(
 diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
-index f7c4268..00726eb 100644
+index 5d5fa3a..382003f 100644
 --- a/codex-rs/core/src/session/turn.rs
 +++ b/codex-rs/core/src/session/turn.rs
-@@ -1828,6 +1828,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
+@@ -2001,6 +2001,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
          | EventMsg::RealtimeConversationRealtime(_)
          | EventMsg::RealtimeConversationClosed(_)
          | EventMsg::ModelReroute(_)
@@ -392,7 +392,7 @@ index f7c4268..00726eb 100644
          | EventMsg::ModelVerification(_)
          | EventMsg::TurnModerationMetadata(_)
          | EventMsg::SafetyBuffering(_)
-@@ -2270,6 +2271,7 @@ async fn try_run_sampling_request(
+@@ -2453,6 +2454,7 @@ async fn try_run_sampling_request(
          .instrument(trace_span!("stream_request"))
          .or_cancel(&cancellation_token)
          .await??;
@@ -400,7 +400,7 @@ index f7c4268..00726eb 100644
      let mut in_flight: FuturesOrdered<InFlightFuture<'static>> = FuturesOrdered::new();
      let mut needs_follow_up = false;
      let mut last_agent_message: Option<String> = None;
-@@ -2534,6 +2536,11 @@ async fn try_run_sampling_request(
+@@ -2724,6 +2726,11 @@ async fn try_run_sampling_request(
                  }
              }
              ResponseEvent::ServerModel(server_model) => {
@@ -412,7 +412,7 @@ index f7c4268..00726eb 100644
                  if !turn_context
                      .server_model_warning_emitted
                      .load(Ordering::Relaxed)
-@@ -2546,6 +2553,15 @@ async fn try_run_sampling_request(
+@@ -2736,6 +2743,15 @@ async fn try_run_sampling_request(
                          .store(true, Ordering::Relaxed);
                  }
              }
@@ -429,24 +429,24 @@ index f7c4268..00726eb 100644
                  if !turn_context
                      .model_verification_emitted
 diff --git a/codex-rs/core/src/turn_timing.rs b/codex-rs/core/src/turn_timing.rs
-index 87f7798..04d9592 100644
+index bc90f81..a083fe2 100644
 --- a/codex-rs/core/src/turn_timing.rs
 +++ b/codex-rs/core/src/turn_timing.rs
 @@ -387,6 +387,7 @@ fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
          | ResponseEvent::ReasoningContentDelta { .. } => true,
-         ResponseEvent::Created
+         ResponseEvent::Created { .. }
          | ResponseEvent::ServerModel(_)
 +        | ResponseEvent::ResponseModelLabel(_)
          | ResponseEvent::ModelVerifications(_)
          | ResponseEvent::TurnModerationMetadata(_)
          | ResponseEvent::SafetyBuffering(_)
 diff --git a/codex-rs/core/tests/suite/mod.rs b/codex-rs/core/tests/suite/mod.rs
-index 8d43ca0..27934a4 100644
+index b266997..b9ab895 100644
 --- a/codex-rs/core/tests/suite/mod.rs
 +++ b/codex-rs/core/tests/suite/mod.rs
-@@ -103,6 +103,7 @@ mod mcp_tool_cache;
- mod mcp_tool_exposure;
+@@ -110,6 +110,7 @@ mod mcp_tool_exposure;
  mod mcp_turn_metadata;
+ mod mcp_user_verification;
  mod model_overrides;
 +mod model_routing;
  mod model_runtime_selectors;
@@ -551,23 +551,11 @@ index 0000000..409284b
 +    assert_eq!(first.service_tier, None);
 +    Ok(())
 +}
-diff --git a/codex-rs/mcp-server/src/codex_tool_runner.rs b/codex-rs/mcp-server/src/codex_tool_runner.rs
-index fdc32c3..d6cc1ac 100644
---- a/codex-rs/mcp-server/src/codex_tool_runner.rs
-+++ b/codex-rs/mcp-server/src/codex_tool_runner.rs
-@@ -358,6 +358,7 @@ async fn run_codex_tool_session_inner(
-                     | EventMsg::DynamicToolCallResponse(_)
-                     | EventMsg::ContextCompacted(_)
-                     | EventMsg::ModelReroute(_)
-+                    | EventMsg::ModelRouting(_)
-                     | EventMsg::ThreadRolledBack(_)
-                     | EventMsg::CollabAgentSpawnBegin(_)
-                     | EventMsg::CollabAgentSpawnEnd(_)
 diff --git a/codex-rs/otel/src/events/session_telemetry.rs b/codex-rs/otel/src/events/session_telemetry.rs
-index 7174bd8..db0f5f3 100644
+index 5e8f7ce..9ffd4a0 100644
 --- a/codex-rs/otel/src/events/session_telemetry.rs
 +++ b/codex-rs/otel/src/events/session_telemetry.rs
-@@ -1284,6 +1284,7 @@ impl SessionTelemetry {
+@@ -1307,6 +1307,7 @@ impl SessionTelemetry {
                  "reasoning_summary_part_added".into()
              }
              ResponseEvent::ServerModel(_) => "server_model".into(),
@@ -576,10 +564,10 @@ index 7174bd8..db0f5f3 100644
              ResponseEvent::TurnModerationMetadata(_) => "turn_moderation_metadata".into(),
              ResponseEvent::SafetyBuffering(_) => "safety_buffering".into(),
 diff --git a/codex-rs/protocol/src/protocol.rs b/codex-rs/protocol/src/protocol.rs
-index ae2107b..464a673 100644
+index e25cce8..b5f1959 100644
 --- a/codex-rs/protocol/src/protocol.rs
 +++ b/codex-rs/protocol/src/protocol.rs
-@@ -1385,6 +1385,9 @@ pub enum EventMsg {
+@@ -1393,6 +1393,9 @@ pub enum EventMsg {
      /// Model routing changed from the requested model to a different model.
      ModelReroute(ModelRerouteEvent),
  
@@ -589,7 +577,7 @@ index ae2107b..464a673 100644
      /// Backend recommends additional account verification for this turn.
      ModelVerification(ModelVerificationEvent),
  
-@@ -2108,6 +2111,23 @@ pub struct ModelRerouteEvent {
+@@ -2116,6 +2119,23 @@ pub struct ModelRerouteEvent {
      pub reason: ModelRerouteReason,
  }
  
@@ -634,10 +622,10 @@ index dadc4bb..662c32f 100644
          | EventMsg::TurnModerationMetadata(_)
          | EventMsg::ContextCompacted(_)
 diff --git a/codex-rs/rollout/src/policy.rs b/codex-rs/rollout/src/policy.rs
-index cc54ac5..6f30011 100644
+index c82b5ce..7df5354 100644
 --- a/codex-rs/rollout/src/policy.rs
 +++ b/codex-rs/rollout/src/policy.rs
-@@ -158,6 +158,7 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode)
+@@ -161,6 +161,7 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode)
          | EventMsg::RealtimeConversationClosed(_)
          | EventMsg::SafetyBuffering(_)
          | EventMsg::ModelReroute(_)

@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.9.0 — 2026-09-22
+
+- **The repository is now `ventusff/cli-model-guard`** — it has carried Model
+  Guard for Codex CLI since 1.4, so the old Claude-only name was wrong. GitHub
+  redirects the old URL, and the marketplace is now called `cli-model-guard`.
+  Existing Claude Code installs migrate once:
+  `claude plugin marketplace remove claude-model-guard`, then
+  `claude plugin marketplace add ventusff/cli-model-guard` and
+  `claude plugin install model-guard@cli-model-guard`. The installed statusline
+  copy under `~/.claude/model-guard/` and `model-guard.conf` are untouched.
+- **Codex: native build moved to official Codex 0.155.1**
+  (`be2951ea34f0d295ed0becf97079f92fa5f6950e`); the routing metadata, status
+  line and test patches are rebased and the package now ships the 0.155 voice
+  runtime. The package is built in the `rust:1.95.0-bookworm` container, so the
+  glibc floor drops from 2.39 to 2.36.
+- **Codex: `codex update` no longer removes Model Guard.** A run of the official
+  installer (which `codex update` used to be) replaced the entry symlink with
+  stock Codex and the guard silently vanished. Inside a Model Guard build,
+  `codex update` and the update banner now run `model-guard-codex update`, and
+  the banner compares against the plugin's `release.json` instead of upstream's
+  latest tag. The new `model-guard-codex update` downloads the plugin's current
+  release, brings the official standalone package to the Codex version that
+  release tracks with OpenAI's own installer, then installs the native package
+  on top; `doctor` prints the build's and the official package's versions and
+  names that command whenever the entry is not the guard.
+- Claude Code side: no behaviour change beyond the marketplace name.
+
 ## 1.8.1 — 2026-09-20
 
 - The session-start hook no longer rolls a newer installed statusline back. A
