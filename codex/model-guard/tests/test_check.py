@@ -88,9 +88,10 @@ class ProbeReaderTests(unittest.IsolatedAsyncioTestCase):
     async def test_child_completion_cannot_finish_parent_probe(self):
         socket = FakeSocket([
             {"method": "turn/completed", "params": {"threadId": "child", "turn": {"id": "t2", "status": "completed"}}},
-            {"method": "turn/completed", "params": {"threadId": "parent", "turn": {"id": "t1", "status": "failed"}}},
+            {"method": "turn/completed", "params": {"threadId": "parent", "turn": {"id": "t1", "status": "failed", "error": {"message": "You’ve hit your usage limit.", "codexErrorInfo": "usageLimitExceeded"}}}},
         ])
-        self.assertEqual(await ProbeReader(socket).completion("parent", "t1"), {"status": "failed"})
+        # The turn's error code is kept as the probe's reason; its message text is not.
+        self.assertEqual(await ProbeReader(socket).completion("parent", "t1"), {"status": "failed", "error": "usageLimitExceeded"})
 
     async def test_early_completion_is_retained_by_thread_and_turn(self):
         socket = FakeSocket([
@@ -101,4 +102,4 @@ class ProbeReaderTests(unittest.IsolatedAsyncioTestCase):
         reader = ProbeReader(socket)
         await reader.response(3)
         self.assertNotIn("private text", str(reader.completed))
-        self.assertEqual(await reader.completion("parent", "new"), {"status": "completed"})
+        self.assertEqual(await reader.completion("parent", "new"), {"status": "completed", "error": None})

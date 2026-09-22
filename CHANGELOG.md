@@ -25,6 +25,8 @@
   release tracks with OpenAI's own installer, then installs the native package
   on top; `doctor` prints the build's and the official package's versions and
   names that command whenever the entry is not the guard.
+- Codex: `probe` reports the failed turn's own error code as its reason
+  (`usageLimitExceeded` instead of a bare `probe_failed`).
 - Claude Code side: no behaviour change beyond the marketplace name.
 
 ## 1.8.1 — 2026-09-20

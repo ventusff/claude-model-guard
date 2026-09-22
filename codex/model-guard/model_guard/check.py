@@ -111,7 +111,8 @@ class ProbeReader:
                 if all(isinstance(value, str) and len(value) <= 120 for value in key):
                     if len(self.completed) >= 16:
                         self.completed.pop(next(iter(self.completed)))
-                    self.completed[key] = {"status": turn.get("status")}
+                    error = turn.get("error") if isinstance(turn.get("error"), dict) else {}
+                    self.completed[key] = {"status": turn.get("status"), "error": error.get("codexErrorInfo")}
             if predicate(msg):
                 if "error" in msg:
                     raise RuntimeError("probe_rpc_failed")
@@ -158,13 +159,17 @@ async def probe(official, model=None, effort=None, timeout=120, cwd=None, option
                     turn = await reader.response(3)
                     completion = await reader.completion(params["threadId"], turn["result"]["turn"]["id"])
                     if completion.get("status") != "completed":
-                        raise RuntimeError("probe_turn_failed")
+                        # The turn's own error code, such as usageLimitExceeded, is the useful reason.
+                        raise RuntimeError(str(completion.get("error") or "probe_turn_failed"))
                     # Model logs and protocol messages travel through independent pipes.
                     await asyncio.sleep(.2)
                     result = verdict(state.snapshot(), "separate_probe")
         except TimeoutError:
             result = {**verdict({}, "separate_probe"), "reason": "probe_timeout"}
-        except (OSError, RuntimeError, KeyError, ValueError, TypeError, ConnectionClosed):
+        except RuntimeError as exc:
+            reason = str(exc)
+            result = {**verdict({}, "separate_probe"), "reason": reason if reason.isidentifier() and len(reason) <= 64 else "probe_failed"}
+        except (OSError, KeyError, ValueError, TypeError, ConnectionClosed):
             result = {**verdict({}, "separate_probe"), "reason": "probe_failed"}
         finally:
             await relay.close()
